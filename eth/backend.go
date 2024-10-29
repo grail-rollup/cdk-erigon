@@ -33,6 +33,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/grail-rollup/btcman"
 	"github.com/ledgerwatch/erigon-lib/common/dir"
 	"github.com/ledgerwatch/erigon-lib/common/disk"
 	"github.com/ledgerwatch/erigon-lib/common/mem"
@@ -221,6 +222,7 @@ type Ethereum struct {
 	dataStream      *datastreamer.StreamServer
 	l1Syncer        *syncer.L1Syncer
 	etherManClients []*etherman.Client
+	btcManClient    btcman.Clienter
 	l1Cache         *l1_cache.L1Cache
 
 	preStartTasks *PreStartTasks
@@ -1020,6 +1022,8 @@ func New(ctx context.Context, stack *node.Node, config *ethconfig.Config, logger
 			backend.etherManClients[i] = newEtherMan(cfg, chainConfig.ChainName, url)
 		}
 
+		backend.btcManClient = newBtcMan(cfg)
+
 		isSequencer := sequencer.IsSequencer()
 
 		// if the L1 block sync is set we're in recovery so can't run as a sequencer
@@ -1065,6 +1069,7 @@ func New(ctx context.Context, stack *node.Node, config *ethconfig.Config, logger
 		seqVerSyncer := syncer.NewL1Syncer(
 			ctx,
 			ethermanClients,
+			backend.btcManClient,
 			seqAndVerifL1Contracts,
 			seqAndVerifTopics,
 			cfg.L1BlockRange,
@@ -1075,6 +1080,7 @@ func New(ctx context.Context, stack *node.Node, config *ethconfig.Config, logger
 		backend.l1Syncer = syncer.NewL1Syncer(
 			ctx,
 			ethermanClients,
+			backend.btcManClient,
 			l1Contracts,
 			l1Topics,
 			cfg.L1BlockRange,
@@ -1090,6 +1096,7 @@ func New(ctx context.Context, stack *node.Node, config *ethconfig.Config, logger
 		l1InfoTreeSyncer := syncer.NewL1Syncer(
 			ctx,
 			ethermanClients,
+			backend.btcManClient,
 			[]libcommon.Address{cfg.AddressGerManager},
 			[][]libcommon.Hash{{contracts.UpdateL1InfoTreeTopic}},
 			cfg.L1BlockRange,
@@ -1144,6 +1151,7 @@ func New(ctx context.Context, stack *node.Node, config *ethconfig.Config, logger
 			l1BlockSyncer := syncer.NewL1Syncer(
 				ctx,
 				ethermanClients,
+				backend.btcManClient,
 				[]libcommon.Address{cfg.AddressZkevm, cfg.AddressRollup},
 				[][]libcommon.Hash{{
 					contracts.SequenceBatchesTopic,
@@ -1274,6 +1282,24 @@ func newEtherMan(cfg *ethconfig.Config, l2ChainName, url string) *etherman.Clien
 		panic(err)
 	}
 	return em
+}
+
+// creates an BtcMan instance with default parameters
+func newBtcMan(cfg *ethconfig.Config) btcman.Clienter {
+	btcCfg := btcman.Config{
+		PublicKey:   cfg.BtcPublicKey,
+		Net:         cfg.BtcNet,
+		IndexerHost: cfg.BtcIndexerHost,
+		IndexerPort: cfg.BtcIndexerPort,
+		Mode:        cfg.BtcMode,
+	}
+	log.Info("Created BTCMAN", "pubkey", btcCfg.PublicKey)
+	bm, err := btcman.NewClient(btcCfg)
+	//panic on error
+	if err != nil {
+		panic(err)
+	}
+	return bm
 }
 
 // creates a datastream client with default parameters

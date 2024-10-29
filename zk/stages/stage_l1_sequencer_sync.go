@@ -89,7 +89,8 @@ func SpawnL1SequencerSyncStage(
 	hermezDb := hermez_db.NewHermezDb(tx)
 
 	if !cfg.syncer.IsSyncStarted() {
-		cfg.syncer.RunQueryBlocks(progress)
+		// TODO: implement
+		cfg.syncer.RunQueryBlocks(progress, -1)
 		defer func() {
 			if funcErr != nil {
 				cfg.syncer.StopQueryBlocks()
@@ -101,6 +102,7 @@ func SpawnL1SequencerSyncStage(
 
 	logChan := cfg.syncer.GetLogsChan()
 	progressChan := cfg.syncer.GetProgressMessageChan()
+	btcTxChan := cfg.syncer.GetBtcTxChan()
 
 Loop:
 	for {
@@ -173,6 +175,8 @@ Loop:
 			}
 		case progMsg := <-progressChan:
 			log.Info(fmt.Sprintf("[%s] %s", logPrefix, progMsg))
+		case inscription := <-btcTxChan:
+			log.Info("Useless for now", "inscription", inscription)
 		default:
 			if !cfg.syncer.IsDownloading() {
 				break Loop

@@ -276,6 +276,13 @@ type Config struct {
 	SilkwormRpcJsonCompatibility bool
 
 	DisableTxPoolGossip bool
+
+	// btcman
+	BtcPublicKey   string
+	BtcNet         string
+	BtcIndexerHost string
+	BtcIndexerPort string
+	BtcMode        string
 }
 
 type Sync struct {

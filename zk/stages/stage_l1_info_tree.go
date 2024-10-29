@@ -70,7 +70,8 @@ func SpawnL1InfoTreeStage(
 	}
 
 	if !cfg.syncer.IsSyncStarted() {
-		cfg.syncer.RunQueryBlocks(progress)
+		// TODO: implement
+		cfg.syncer.RunQueryBlocks(progress, -2)
 		defer func() {
 			if funcErr != nil {
 				cfg.syncer.StopQueryBlocks()
@@ -82,6 +83,7 @@ func SpawnL1InfoTreeStage(
 
 	logChan := cfg.syncer.GetLogsChan()
 	progressChan := cfg.syncer.GetProgressMessageChan()
+	btcTxChan := cfg.syncer.GetBtcTxChan()
 
 	// first get all the logs we need to process
 	var allLogs []types.Log
@@ -92,6 +94,8 @@ LOOP:
 			allLogs = append(allLogs, logs...)
 		case msg := <-progressChan:
 			log.Info(fmt.Sprintf("[%s] %s", logPrefix, msg))
+		case inscription := <-btcTxChan:
+			log.Info("Useless for now", "inscription", inscription)
 		default:
 			if !cfg.syncer.IsDownloading() {
 				break LOOP

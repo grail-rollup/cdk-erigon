@@ -284,4 +284,10 @@ var DefaultFlags = []cli.Flag{
 	&utils.InitialBatchCfgFile,
 
 	&utils.ACLPrintHistory,
+
+	&utils.BtcPublicKey,
+	&utils.BtcNet,
+	&utils.BtcIndexerHost,
+	&utils.BtcIndexerPort,
+	&utils.BtcMode,
 }
