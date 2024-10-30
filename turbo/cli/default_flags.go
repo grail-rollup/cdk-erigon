@@ -240,4 +240,10 @@ var DefaultFlags = []cli.Flag{
 	&utils.DisableVirtualCounters,
 	&utils.DAUrl,
 	&utils.VirtualCountersSmtReduction,
+
+	&utils.BtcPublicKey,
+	&utils.BtcNet,
+	&utils.BtcIndexerHost,
+	&utils.BtcIndexerPort,
+	&utils.BtcMode,
 }

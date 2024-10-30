@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gateway-fm/cdk-erigon-lib/common"
+	"github.com/grail-rollup/btcman"
 	"github.com/iden3/go-iden3-crypto/keccak256"
 	ethereum "github.com/ledgerwatch/erigon"
 	"github.com/ledgerwatch/log/v3"
@@ -61,6 +62,7 @@ type L1Syncer struct {
 	etherMans           []IEtherman
 	ethermanIndex       uint8
 	ethermanMtx         *sync.Mutex
+	btcMan              btcman.Clienter
 	l1ContractAddresses []common.Address
 	topics              [][]common.Hash
 	blockRange          uint64
@@ -69,31 +71,35 @@ type L1Syncer struct {
 	latestL1Block uint64
 
 	// atomic
-	isSyncStarted      atomic.Bool
-	isDownloading      atomic.Bool
-	lastCheckedL1Block atomic.Uint64
-	wgRunLoopDone      sync.WaitGroup
-	flagStop           atomic.Bool
+	isSyncStarted         atomic.Bool
+	isDownloading         atomic.Bool
+	lastCheckedL1Block    atomic.Uint64
+	lastCheckedBtcL1Block atomic.Int32
+	wgRunLoopDone         sync.WaitGroup
+	flagStop              atomic.Bool
 
 	// Channels
 	logsChan         chan []ethTypes.Log
 	logsChanProgress chan string
+	btcTxChan        chan BtcLog
 
 	highestBlockType string // finalized, latest, safe
 }
 
-func NewL1Syncer(ctx context.Context, etherMans []IEtherman, l1ContractAddresses []common.Address, topics [][]common.Hash, blockRange, queryDelay uint64, highestBlockType string) *L1Syncer {
+func NewL1Syncer(ctx context.Context, etherMans []IEtherman, btcMan btcman.Clienter, l1ContractAddresses []common.Address, topics [][]common.Hash, blockRange, queryDelay uint64, highestBlockType string) *L1Syncer {
 	return &L1Syncer{
 		ctx:                 ctx,
 		etherMans:           etherMans,
 		ethermanIndex:       0,
 		ethermanMtx:         &sync.Mutex{},
+		btcMan:              btcMan,
 		l1ContractAddresses: l1ContractAddresses,
 		topics:              topics,
 		blockRange:          blockRange,
 		queryDelay:          queryDelay,
 		logsChan:            make(chan []ethTypes.Log),
 		logsChanProgress:    make(chan string),
+		btcTxChan:           make(chan BtcLog),
 		highestBlockType:    highestBlockType,
 	}
 }
@@ -122,6 +128,10 @@ func (s *L1Syncer) IsDownloading() bool {
 
 func (s *L1Syncer) GetLastCheckedL1Block() uint64 {
 	return s.lastCheckedL1Block.Load()
+}
+
+func (s *L1Syncer) GetLastCheckedBtcL1Block() int32 {
+	return s.lastCheckedBtcL1Block.Load()
 }
 
 func (s *L1Syncer) StopQueryBlocks() {
@@ -155,7 +165,11 @@ func (s *L1Syncer) GetProgressMessageChan() chan string {
 	return s.logsChanProgress
 }
 
-func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64) {
+func (s *L1Syncer) GetBtcTxChan() chan BtcLog {
+	return s.btcTxChan
+}
+
+func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64, lastCheckedBtcBlock int32) {
 	//if already started, don't start another thread
 	if s.isSyncStarted.Load() {
 		return
@@ -166,6 +180,7 @@ func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64) {
 	// set it to true to catch the first cycle run case where the check can pass before the latest block is checked
 	s.isDownloading.Store(true)
 	s.lastCheckedL1Block.Store(lastCheckedBlock)
+	s.lastCheckedBtcL1Block.Store(lastCheckedBtcBlock)
 
 	s.wgRunLoopDone.Add(1)
 	s.flagStop.Store(false)
@@ -194,6 +209,45 @@ func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64) {
 					} else {
 						s.lastCheckedL1Block.Store(latestL1Block)
 					}
+				}
+			}
+
+			latestBtcL1Block, err := s.getLatestBtcL1Block()
+			lastCheckedBtcBlock = s.lastCheckedBtcL1Block.Load()
+			if err != nil {
+				log.Error("Error getting latest BTC L1 block", "err", err)
+			} else {
+				log.Info("Got latest BTC block", "new", latestBtcL1Block, "old", lastCheckedBtcBlock)
+				if latestBtcL1Block > lastCheckedBtcBlock && lastCheckedBtcBlock >= 0 { // TODO remove >=0 check when the other stages are implemented
+					s.isDownloading.Store(true)
+					txs, err := s.btcMan.GetHistory()
+					if err != nil {
+						log.Error("Error getting history", "err", err)
+					}
+					log.Info("BTC history", "len", len(txs), "latestBtcL1Block", latestBtcL1Block)
+
+					for _, tx := range txs {
+						// TODO: txs are sorted so we can find the new ones with binary search instead of going through all of them
+						// TODO: we can use fulcrum to filter by height when calling the indexer
+						if tx.Height > lastCheckedBtcBlock {
+							inscription, err := s.btcMan.DecodeInscription(tx.TxHash)
+							if err != nil {
+								log.Error("Error decoding tx", "err", err)
+							} else {
+								btcLog := BtcLog{
+									TxHash:          tx.TxHash,
+									InscriptionData: inscription,
+									BlockNumber:     tx.Height,
+									// Get it from `blockchain.transaction.get` or `blockchain.block.header`
+									BlockHash: "",
+								}
+								s.btcTxChan <- btcLog
+							}
+						}
+					}
+
+					// TODO: error handle?
+					s.lastCheckedBtcL1Block.Store(latestBtcL1Block)
 				}
 			}
 
@@ -329,6 +383,10 @@ func (s *L1Syncer) getLatestL1Block() (uint64, error) {
 	s.latestL1Block = latest
 
 	return latest, nil
+}
+
+func (s *L1Syncer) getLatestBtcL1Block() (int32, error) {
+	return s.btcMan.GetBlockchainHeight()
 }
 
 func (s *L1Syncer) queryBlocks() error {

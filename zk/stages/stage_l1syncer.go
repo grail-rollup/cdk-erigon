@@ -22,6 +22,8 @@ import (
 	"github.com/ledgerwatch/erigon/zk/hermez_db"
 	"github.com/ledgerwatch/erigon/zk/sequencer"
 	"github.com/ledgerwatch/erigon/zk/types"
+
+	"github.com/ledgerwatch/erigon/zk/syncer"
 )
 
 type IL1Syncer interface {
@@ -30,15 +32,17 @@ type IL1Syncer interface {
 	IsSyncStarted() bool
 	IsDownloading() bool
 	GetLastCheckedL1Block() uint64
+	GetLastCheckedBtcL1Block() int32
 
 	// Channels
 	GetLogsChan() chan []ethTypes.Log
 	GetProgressMessageChan() chan string
+	GetBtcTxChan() chan syncer.BtcLog
 
 	L1QueryHeaders(logs []ethTypes.Log) (map[uint64]*ethTypes.Header, error)
 	GetBlock(number uint64) (*ethTypes.Block, error)
 	GetHeader(number uint64) (*ethTypes.Header, error)
-	RunQueryBlocks(lastCheckedBlock uint64)
+	RunQueryBlocks(lastCheckedBlock uint64, lastCheckedBtcBlock int32)
 	StopQueryBlocks()
 	ConsumeQueryBlocks()
 	WaitQueryBlocksToFinish()
@@ -109,6 +113,12 @@ func SpawnStageL1Syncer(
 		return fmt.Errorf("failed to get l1 progress block, %w", err)
 	}
 
+	btcL1BlockProgress, err := stages.GetStageProgress(tx, stages.L1SyncerBtc)
+	if err != nil {
+		return fmt.Errorf("failed to get BTC l1 progress block, %w", err)
+	}
+	log.Info("Getting stage progress", "btcL1Block", btcL1BlockProgress)
+
 	// start syncer if not started
 	if !cfg.syncer.IsSyncStarted() {
 		if l1BlockProgress == 0 {
@@ -116,7 +126,7 @@ func SpawnStageL1Syncer(
 		}
 
 		// start the syncer
-		cfg.syncer.RunQueryBlocks(l1BlockProgress)
+		cfg.syncer.RunQueryBlocks(l1BlockProgress, int32(btcL1BlockProgress))
 		defer func() {
 			if funcErr != nil {
 				cfg.syncer.StopQueryBlocks()
@@ -128,6 +138,7 @@ func SpawnStageL1Syncer(
 
 	logsChan := cfg.syncer.GetLogsChan()
 	progressMessageChan := cfg.syncer.GetProgressMessageChan()
+	btcTxChan := cfg.syncer.GetBtcTxChan()
 	highestVerification := types.L1BatchInfo{}
 
 	newVerificationsCount := 0
@@ -144,6 +155,7 @@ Loop:
 				case logSequence:
 					fallthrough
 				case logSequenceEtrog:
+					log.Info("Ethereum sequence batch", "L1InfoRoot", info.L1InfoRoot, "Batch num", info.BatchNo, "L1BlockNo", info.L1BlockNo, "L1TxHash", info.L1TxHash)
 					// prevent storing pre-etrog sequences for etrog rollups
 					if batchLogType == logSequence && cfg.zkCfg.L1RollupId > 1 {
 						continue
@@ -167,6 +179,7 @@ Loop:
 				case logVerify:
 					fallthrough
 				case logVerifyEtrog:
+					log.Info("Ethereum verify batch", "StateRoot", info.StateRoot, "Batch num", info.BatchNo, "L1BlockNo", info.L1BlockNo, "L1TxHash", info.L1TxHash)
 					// prevent storing pre-etrog verifications for etrog rollups
 					if batchLogType == logVerify && cfg.zkCfg.L1RollupId > 1 {
 						continue
@@ -190,6 +203,15 @@ Loop:
 			}
 		case progressMessage := <-progressMessageChan:
 			log.Info(fmt.Sprintf("[%s] %s", logPrefix, progressMessage))
+		case btcLog := <-btcTxChan:
+			info, btcLogType := parseBtcLogType(btcLog)
+			switch btcLogType {
+			case btcLogSequence:
+				log.Info("Bitcoin sequence batch", "L1InfoRoot", info.L1InfoRoot, "Batch num", info.BatchNo, "L1BlockNo", info.L1BlockNo, "L1TxHash", info.L1TxHash)
+			case btcLogVerify:
+				log.Info("Bitcoin verify batch", "StateRoot", info.StateRoot, "Batch num", info.BatchNo, "L1BlockNo", info.L1BlockNo, "L1TxHash", info.L1TxHash)
+				// TODO: set highestVerification and newVerificationsCount
+			}
 		default:
 			if !cfg.syncer.IsDownloading() {
 				break Loop
@@ -199,6 +221,7 @@ Loop:
 	}
 
 	latestCheckedBlock := cfg.syncer.GetLastCheckedL1Block()
+	latestCheckedBtcBlock := cfg.syncer.GetLastCheckedBtcL1Block()
 
 	lastCheckedL1BlockCounter.Set(latestCheckedBlock)
 
@@ -226,6 +249,15 @@ Loop:
 		}
 	} else {
 		log.Info(fmt.Sprintf("[%s] No new L1 blocks to sync", logPrefix))
+	}
+
+	// TODO: only save if the last inscription block is > the last state progress
+	// TODO: save highestWritten (take it from "events") instead of latest chened block
+	// TODO: do verification checks?
+	log.Info("Saving BTC state", "latest", latestCheckedBtcBlock)
+	if err := stages.SaveStageProgress(tx, stages.L1SyncerBtc, uint64(latestCheckedBtcBlock)); err != nil {
+		funcErr = fmt.Errorf("failed to save BTC stage progress, %w", err)
+		return funcErr
 	}
 
 	if internalTxOpened {
@@ -308,6 +340,54 @@ func parseLogType(l1RollupId uint64, log *ethTypes.Log) (l1BatchInfo types.L1Bat
 		StateRoot:  stateRoot,
 		L1InfoRoot: l1InfoRoot,
 	}, batchLogType
+}
+
+type BtcLogType byte
+
+var (
+	btcLogUnknown  BtcLogType = 0
+	btcLogSequence BtcLogType = 1
+	btcLogVerify   BtcLogType = 2
+)
+
+// Sequence message
+// TODO: we probably will need the sequenced batches as well
+// [0:16] lastBatchNum
+// [16:80] l1ExitRoot
+
+// Verify message
+// [0:64] newExitRoot
+// [64:128] stateRoot
+// [128:1664] proof
+// [1664:1680] lastBatchNum
+
+func parseBtcLogType(log syncer.BtcLog) (batchInfo types.L1BatchInfo, btcLogType BtcLogType) {
+	var (
+		batchNum              uint64
+		stateRoot, l1InfoRoot common.Hash
+	)
+
+	if log.InscriptionData == "" {
+		btcLogType = btcLogUnknown
+	} else if len(log.InscriptionData) == 1681 { // 840 bytes + starting 0
+		inscription := log.InscriptionData[1:]
+		btcLogType = btcLogVerify
+		stateRoot = common.HexToHash(inscription[64:128])
+		batchNum = new(big.Int).SetBytes(common.FromHex(inscription[1664:])).Uint64()
+	} else {
+		inscription := log.InscriptionData[1:]
+		batchNum = new(big.Int).SetBytes(common.FromHex(inscription[16:80])).Uint64()
+		l1InfoRoot = common.HexToHash(inscription[16:80])
+		btcLogType = btcLogSequence
+	}
+
+	return types.L1BatchInfo{
+		BatchNo:    batchNum,
+		L1BlockNo:  uint64(log.BlockNumber),
+		L1TxHash:   common.HexToHash(log.TxHash),
+		StateRoot:  stateRoot,
+		L1InfoRoot: l1InfoRoot,
+	}, btcLogType
 }
 
 func UnwindL1SyncerStage(u *stagedsync.UnwindState, tx kv.RwTx, cfg L1SyncerCfg, ctx context.Context) (err error) {

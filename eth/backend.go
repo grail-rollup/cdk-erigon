@@ -32,6 +32,7 @@ import (
 	"time"
 
 	erigonchain "github.com/gateway-fm/cdk-erigon-lib/chain"
+	"github.com/grail-rollup/btcman"
 	"github.com/holiman/uint256"
 	"github.com/ledgerwatch/erigon/zk/sequencer"
 	"github.com/ledgerwatch/erigon/zk/txpool"
@@ -201,6 +202,7 @@ type Ethereum struct {
 	dataStream      *datastreamer.StreamServer
 	l1Syncer        *syncer.L1Syncer
 	etherManClients []*etherman.Client
+	btcManClient    btcman.Clienter
 	l1Cache         *l1_cache.L1Cache
 
 	preStartTasks *PreStartTasks
@@ -826,9 +828,12 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			ethermanClients[i] = c.EthClient
 		}
 
+		backend.btcManClient = newBtcMan(cfg)
+
 		seqVerSyncer := syncer.NewL1Syncer(
 			ctx,
 			ethermanClients,
+			backend.btcManClient,
 			seqAndVerifL1Contracts,
 			seqAndVerifTopics,
 			cfg.L1BlockRange,
@@ -839,6 +844,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		backend.l1Syncer = syncer.NewL1Syncer(
 			ctx,
 			ethermanClients,
+			backend.btcManClient,
 			l1Contracts,
 			l1Topics,
 			cfg.L1BlockRange,
@@ -863,6 +869,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		l1InfoTreeSyncer := syncer.NewL1Syncer(
 			ctx,
 			ethermanClients,
+			backend.btcManClient,
 			[]libcommon.Address{cfg.AddressGerManager},
 			[][]libcommon.Hash{{contracts.UpdateL1InfoTreeTopic}},
 			cfg.L1BlockRange,
@@ -917,6 +924,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			l1BlockSyncer := syncer.NewL1Syncer(
 				ctx,
 				ethermanClients,
+				backend.btcManClient,
 				[]libcommon.Address{cfg.AddressZkevm, cfg.AddressRollup},
 				[][]libcommon.Hash{{
 					contracts.SequenceBatchesTopic,
@@ -1047,6 +1055,23 @@ func newEtherMan(cfg *ethconfig.Config, l2ChainName, url string) *etherman.Clien
 		panic(err)
 	}
 	return em
+}
+
+func newBtcMan(cfg *ethconfig.Config) btcman.Clienter {
+	btcCfg := btcman.Config{
+		PublicKey:   cfg.BtcPublicKey,
+		Net:         cfg.BtcNet,
+		IndexerHost: cfg.BtcIndexerHost,
+		IndexerPort: cfg.BtcIndexerPort,
+		Mode:        cfg.BtcMode,
+	}
+	log.Info("Created BTCMAN", "pubkey", btcCfg.PublicKey)
+	bm, err := btcman.NewClient(btcCfg)
+	//panic on error
+	if err != nil {
+		panic(err)
+	}
+	return bm
 }
 
 // creates a datastream client with default parameters
