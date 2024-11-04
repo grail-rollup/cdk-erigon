@@ -1,6 +1,6 @@
 module github.com/ledgerwatch/erigon
 
-go 1.19
+go 1.21
 
 require (
 	github.com/ledgerwatch/erigon-snapshot v1.1.1-0.20230404044759-5dec854ce336

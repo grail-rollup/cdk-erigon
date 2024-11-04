@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"sync"
@@ -18,6 +19,7 @@ import (
 
 	ethTypes "github.com/ledgerwatch/erigon/core/types"
 	"github.com/ledgerwatch/erigon/rpc"
+	"github.com/ledgerwatch/erigon/zk/contracts"
 )
 
 var (
@@ -212,44 +214,46 @@ func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64, lastCheckedBtcBlock i
 				}
 			}
 
-			latestBtcL1Block, err := s.getLatestBtcL1Block()
-			lastCheckedBtcBlock = s.lastCheckedBtcL1Block.Load()
-			if err != nil {
-				log.Error("Error getting latest BTC L1 block", "err", err)
-			} else {
-				log.Info("Got latest BTC block", "new", latestBtcL1Block, "old", lastCheckedBtcBlock)
-				if latestBtcL1Block > lastCheckedBtcBlock && lastCheckedBtcBlock >= 0 { // TODO remove >=0 check when the other stages are implemented
-					s.isDownloading.Store(true)
-					txs, err := s.btcMan.GetHistory()
-					if err != nil {
-						log.Error("Error getting history", "err", err)
-					}
-					log.Info("BTC history", "len", len(txs), "latestBtcL1Block", latestBtcL1Block)
+			// BTC START
+			// latestBtcL1Block, err := s.getLatestBtcL1Block()
+			// lastCheckedBtcBlock = s.lastCheckedBtcL1Block.Load()
+			// if err != nil {
+			// 	log.Error("Error getting latest BTC L1 block", "err", err)
+			// } else {
+			// 	log.Info("Got latest BTC block", "new", latestBtcL1Block, "old", lastCheckedBtcBlock)
+			// 	if latestBtcL1Block > lastCheckedBtcBlock && lastCheckedBtcBlock >= 0 { // TODO remove >=0 check when the other stages are implemented
+			// 		s.isDownloading.Store(true)
+			// 		txs, err := s.btcMan.GetHistory()
+			// 		if err != nil {
+			// 			log.Error("Error getting history", "err", err)
+			// 		}
+			// 		log.Info("BTC history", "len", len(txs), "latestBtcL1Block", latestBtcL1Block)
 
-					for _, tx := range txs {
-						// TODO: txs are sorted so we can find the new ones with binary search instead of going through all of them
-						// TODO: we can use fulcrum to filter by height when calling the indexer
-						if tx.Height > lastCheckedBtcBlock {
-							inscription, err := s.btcMan.DecodeInscription(tx.TxHash)
-							if err != nil {
-								log.Error("Error decoding tx", "err", err)
-							} else {
-								btcLog := BtcLog{
-									TxHash:          tx.TxHash,
-									InscriptionData: inscription,
-									BlockNumber:     tx.Height,
-									// Get it from `blockchain.transaction.get` or `blockchain.block.header`
-									BlockHash: "",
-								}
-								s.btcTxChan <- btcLog
-							}
-						}
-					}
+			// 		for _, tx := range txs {
+			// 			// TODO: txs are sorted so we can find the new ones with binary search instead of going through all of them
+			// 			// TODO: we can use fulcrum to filter by height when calling the indexer
+			// 			if tx.Height > lastCheckedBtcBlock {
+			// 				inscription, err := s.btcMan.DecodeInscription(tx.TxHash)
+			// 				if err != nil {
+			// 					log.Error("Error decoding tx", "err", err)
+			// 				} else {
+			// 					btcLog := BtcLog{
+			// 						TxHash:          tx.TxHash,
+			// 						InscriptionData: inscription,
+			// 						BlockNumber:     tx.Height,
+			// 						// Get it from `blockchain.transaction.get` or `blockchain.block.header`
+			// 						BlockHash: "",
+			// 					}
+			// 					s.btcTxChan <- btcLog
+			// 				}
+			// 			}
+			// 		}
 
-					// TODO: error handle?
-					s.lastCheckedBtcL1Block.Store(latestBtcL1Block)
-				}
-			}
+			// 		// TODO: error handle?
+			// 		s.lastCheckedBtcL1Block.Store(latestBtcL1Block)
+			// 	}
+			// }
+			// BTC END
 
 			s.isDownloading.Store(false)
 			time.Sleep(time.Duration(s.queryDelay) * time.Millisecond)
@@ -394,8 +398,14 @@ func (s *L1Syncer) queryBlocks() error {
 	// lastCheckedL1Block means that it has already been checked in the previous cycle.
 	// It should not be checked again in the new cycle, so +1 is added here.
 	startBlock := s.lastCheckedL1Block.Load() + 1
-
 	log.Debug("GetHighestSequence", "startBlock", startBlock)
+
+	startBlockBTC := s.lastCheckedBtcL1Block.Load() + 1
+	log.Debug("GetHighestSequenceBTC", "startBlock", startBlockBTC)
+	latestBtcL1Block, err := s.btcMan.GetBlockchainHeight()
+	if err != nil {
+		return err
+	}
 
 	// define the blocks we're going to fetch up front
 	fetches := make([]fetchJob, 0)
@@ -418,15 +428,40 @@ func (s *L1Syncer) queryBlocks() error {
 		low += s.blockRange + 1
 	}
 
+	fetchesBTC := make([]fetchJob, 0)
+	lowBTC := startBlockBTC
+	for {
+		high := uint64(lowBTC) + s.blockRange
+		if high > uint64(latestBtcL1Block) {
+			// at the end of our search
+			high = uint64(latestBtcL1Block)
+		}
+
+		fetchesBTC = append(fetchesBTC, fetchJob{
+			From: uint64(lowBTC),
+			To:   high,
+		})
+
+		if high == uint64(latestBtcL1Block) {
+			break
+		}
+		lowBTC = int32(uint64(lowBTC) + s.blockRange + 1)
+	}
+
 	wg := sync.WaitGroup{}
 	stop := make(chan bool)
+	stopBTC := make(chan bool)
+
 	jobs := make(chan fetchJob, len(fetches))
-	results := make(chan jobResult, len(fetches))
+	jobsBTC := make(chan fetchJob, len(fetchesBTC))
+
+	results := make(chan jobResult, len(fetches)+len(fetchesBTC))
 	defer close(results)
 
-	wg.Add(batchWorkers)
+	wg.Add(batchWorkers * 2)
 	for i := 0; i < batchWorkers; i++ {
 		go s.getSequencedLogs(jobs, results, stop, &wg)
+		go s.getSequencedLogsBTC(jobsBTC, results, stopBTC, &wg)
 	}
 
 	for _, fetch := range fetches {
@@ -434,10 +469,15 @@ func (s *L1Syncer) queryBlocks() error {
 	}
 	close(jobs)
 
+	for _, fetch := range fetchesBTC {
+		jobsBTC <- fetch
+	}
+	close(jobsBTC)
+
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
-	var err error
+	// var err error
 	var progress uint64 = 0
 
 	aimingFor := s.latestL1Block - startBlock
@@ -519,6 +559,114 @@ func (s *L1Syncer) getSequencedLogs(jobs <-chan fetchJob, results chan jobResult
 				}
 				break
 			}
+			filteredLogs := []ethTypes.Log{}
+			for _, l := range logs {
+				if l.Topics[0] != contracts.SequencedBatchTopicEtrog && l.Topics[0] != contracts.VerificationTopicEtrog {
+					filteredLogs = append(filteredLogs, l)
+				}
+			}
+			results <- jobResult{
+				Size:  j.To - j.From,
+				Error: nil,
+				Logs:  filteredLogs,
+			}
+		}
+	}
+}
+
+func populateInscriptionMap(inscriptionData string, rootsByBatch map[int]common.Hash, l1InfoRootByBatch map[int]common.Hash) error {
+	if inscriptionData == "" {
+		return errors.New("inscription data is empty")
+	}
+
+	if len(inscriptionData) == 1681 { // 840 bytes + starting 0
+		inscription := inscriptionData[1:]
+		stateRoot := common.HexToHash(inscription[64:128])
+
+		batchNum := new(big.Int).SetBytes(common.FromHex(inscription[1664:])).Uint64()
+
+		rootsByBatch[int(batchNum)] = stateRoot
+	} else {
+		inscription := inscriptionData[1:]
+		// fmt.Println(inscription)
+		batchNum := new(big.Int).SetBytes(common.FromHex(inscription[64:80])).Uint64()
+		l1InfoRoot := common.HexToHash(inscription[16:64])
+		l1InfoRootByBatch[int(batchNum)] = l1InfoRoot
+	}
+	return nil
+}
+
+func (s *L1Syncer) getInscriptions(stateRootByBatch map[int]common.Hash, l1InfoRootByBatch map[int]common.Hash) error {
+
+	tnxs, err := s.btcMan.GetHistory()
+	if err != nil {
+		return err
+	}
+
+	for _, tnx := range tnxs {
+		decoded, err := s.btcMan.DecodeInscription(tnx.TxHash)
+		if err != nil {
+			// fmt.Println("No inscription: ", err)
+			continue
+		}
+		err = populateInscriptionMap(decoded, stateRootByBatch, l1InfoRootByBatch)
+		if err != nil {
+			continue
+		}
+	}
+
+	return nil
+}
+func (s *L1Syncer) getSequencedLogsBTC(jobs <-chan fetchJob, results chan jobResult, stop chan bool, wg *sync.WaitGroup) {
+	defer wg.Done()
+	/* what we need to do here :
+	- construct the two topic logs and pass the to the logs channel
+	- skip this two two topics in the original getSequencedLogs: this is done
+	- update parsing logic for this two events
+	*/
+	for {
+		select {
+		case <-stop:
+			return
+		case j, ok := <-jobs:
+			if !ok {
+				return
+			}
+			// from := j.From
+			// Get inscriptions and prepare logs ONLY FROM THE UNCHECKED BLOCKS
+			stateRootByBatch := make(map[int]common.Hash)
+			l1InfoRootByBatch := make(map[int]common.Hash)
+			err := s.getInscriptions(stateRootByBatch, l1InfoRootByBatch)
+			if err != nil {
+				// fmt.Println("Error getting inscriptions: ", err)
+				continue
+			}
+
+			logs := []ethTypes.Log{}
+			for batchNum, stateRoot := range stateRootByBatch {
+				batchNumHash := common.BigToHash(new(big.Int).SetInt64(int64(batchNum)))
+				verificationTopicLog := ethTypes.Log{
+					Topics: []common.Hash{
+						contracts.VerificationTopicEtrog,
+						batchNumHash,
+					},
+					Data: []byte(stateRoot.Hex()),
+				}
+				logs = append(logs, verificationTopicLog)
+			}
+
+			for _, l1InfoRoot := range l1InfoRootByBatch {
+				rollupID := common.BigToHash(new(big.Int).SetInt64(int64(420)))
+				sequencedBatchTopicLog := ethTypes.Log{
+					Topics: []common.Hash{
+						contracts.SequencedBatchTopicEtrog,
+						rollupID,
+					},
+					Data: []byte(l1InfoRoot.Hex()),
+				}
+				logs = append(logs, sequencedBatchTopicLog)
+			}
+
 			results <- jobResult{
 				Size:  j.To - j.From,
 				Error: nil,

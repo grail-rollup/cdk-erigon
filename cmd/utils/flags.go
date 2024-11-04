@@ -1148,7 +1148,7 @@ var (
 	BtcPublicKey = cli.StringFlag{
 		Name:  "btcman.public-key",
 		Usage: "BTC public key",
-		Value: "",
+		Value: "03e392587e5c9fdb0b4f96614d8a557a953e6cb1253298a60ff947e3193adedbb7",
 	}
 	BtcNet = cli.StringFlag{
 		Name:  "btcman.network",
@@ -1158,7 +1158,7 @@ var (
 	BtcIndexerHost = cli.StringFlag{
 		Name:  "btcman.indexer.host",
 		Usage: "BTC Electrum indexer host address",
-		Value: "localhost",
+		Value: "host.docker.internal",
 	}
 	BtcIndexerPort = cli.StringFlag{
 		Name:  "btcman.indexer.port",
