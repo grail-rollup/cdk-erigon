@@ -114,7 +114,7 @@ func SpawnSequencerL1BlockSyncStage(
 	}
 
 	if !cfg.syncer.IsSyncStarted() {
-		cfg.syncer.RunQueryBlocks(l1BlockHeight, -3)
+		cfg.syncer.RunQueryBlocks(l1BlockHeight, false)
 		defer func() {
 			if funcErr != nil {
 				cfg.syncer.StopQueryBlocks()
@@ -126,7 +126,6 @@ func SpawnSequencerL1BlockSyncStage(
 
 	logChan := cfg.syncer.GetLogsChan()
 	progressChan := cfg.syncer.GetProgressMessageChan()
-	btcTxChan := cfg.syncer.GetBtcTxChan()
 
 	logTicker := time.NewTicker(10 * time.Second)
 	defer logTicker.Stop()
@@ -214,8 +213,6 @@ LOOP:
 			}
 		case msg := <-progressChan:
 			log.Info(fmt.Sprintf("[%s] %s", logPrefix, msg))
-		case inscription := <-btcTxChan:
-			log.Info("Useless for now", "inscription", inscription)
 		case <-logTicker.C:
 			log.Info(fmt.Sprintf("[%s] Syncing L1 blocks", logPrefix), "latest-batch", latestBatch)
 		default:

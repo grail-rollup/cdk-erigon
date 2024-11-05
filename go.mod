@@ -1,6 +1,8 @@
 module github.com/ledgerwatch/erigon
 
-go 1.21
+go 1.19
+
+replace github.com/grail-rollup/btcman => ../btcman
 
 require (
 	github.com/ledgerwatch/erigon-snapshot v1.1.1-0.20230404044759-5dec854ce336
@@ -96,7 +98,7 @@ require (
 	github.com/xsleonard/go-merkle v1.1.0
 	go.uber.org/mock v0.4.0
 	go.uber.org/zap v1.27.0
-	golang.org/x/crypto v0.28.0
+	golang.org/x/crypto v0.23.0
 	golang.org/x/exp v0.0.0-20230321023759-10a507213a29
 	golang.org/x/net v0.25.0
 	golang.org/x/sync v0.8.0
