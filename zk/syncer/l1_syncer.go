@@ -83,7 +83,6 @@ type L1Syncer struct {
 	// Channels
 	logsChan         chan []ethTypes.Log
 	logsChanProgress chan string
-	btcTxChan        chan BtcLog
 
 	highestBlockType string // finalized, latest, safe
 }
@@ -101,7 +100,6 @@ func NewL1Syncer(ctx context.Context, etherMans []IEtherman, btcMan btcman.Clien
 		queryDelay:          queryDelay,
 		logsChan:            make(chan []ethTypes.Log),
 		logsChanProgress:    make(chan string),
-		btcTxChan:           make(chan BtcLog),
 		highestBlockType:    highestBlockType,
 	}
 }
@@ -165,10 +163,6 @@ func (s *L1Syncer) GetLogsChan() chan []ethTypes.Log {
 
 func (s *L1Syncer) GetProgressMessageChan() chan string {
 	return s.logsChanProgress
-}
-
-func (s *L1Syncer) GetBtcTxChan() chan BtcLog {
-	return s.btcTxChan
 }
 
 func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64, syncFromBtc bool) {

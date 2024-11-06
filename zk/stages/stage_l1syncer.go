@@ -22,8 +22,6 @@ import (
 	"github.com/ledgerwatch/erigon/zk/hermez_db"
 	"github.com/ledgerwatch/erigon/zk/sequencer"
 	"github.com/ledgerwatch/erigon/zk/types"
-
-	"github.com/ledgerwatch/erigon/zk/syncer"
 )
 
 type IL1Syncer interface {
@@ -37,7 +35,6 @@ type IL1Syncer interface {
 	// Channels
 	GetLogsChan() chan []ethTypes.Log
 	GetProgressMessageChan() chan string
-	GetBtcTxChan() chan syncer.BtcLog
 
 	L1QueryHeaders(logs []ethTypes.Log) (map[uint64]*ethTypes.Header, error)
 	GetBlock(number uint64) (*ethTypes.Block, error)

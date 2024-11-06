@@ -335,11 +335,3 @@ func decodePreEtrogSequenceBatchesValidiumCallData(unpackedCalldata map[string]i
 
 	return calldata
 }
-
-type BtcLog struct {
-	InscriptionData string // TODO: change to bytes?
-	BlockNumber     int32
-	TxHash          string
-	TxIndex         uint
-	BlockHash       string
-}
