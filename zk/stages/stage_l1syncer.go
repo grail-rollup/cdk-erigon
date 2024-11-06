@@ -112,7 +112,6 @@ func SpawnStageL1Syncer(
 	if err != nil {
 		return fmt.Errorf("failed to get l1 progress block, %w", err)
 	}
-	log.Info("L1 Progress", "prog", l1BlockProgress)
 
 	// start syncer if not started
 	if !cfg.syncer.IsSyncStarted() {

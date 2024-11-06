@@ -408,7 +408,7 @@ func (s *L1Syncer) queryBlocks(syncFromBtc bool) error {
 
 	if syncFromBtc {
 		wg.Add(1)
-		go s.getSequencedLogsBTC(int32(startBlock), results, stopBTC, &wg)
+		go s.getSequencedLogsBTC(int32(startBlock), stopBTC, &wg)
 	}
 
 	for _, fetch := range fetches {
@@ -523,7 +523,7 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 	if err != nil {
 		return nil, err
 	}
-	log.Info("GetHistory", "total", len(tnxs))
+
 	// Filter transactions by height
 	filteredTxs := []*indexer.Transaction{}
 	for _, tx := range tnxs {
@@ -532,14 +532,12 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 		}
 	}
 
-	log.Info("GetHistory", "filtered", len(filteredTxs), "startBlock", startBlock)
 	for _, tnx := range filteredTxs {
 		decoded, err := s.btcMan.DecodeInscription(tnx.TxHash)
 		if err != nil || len(decoded) == 0 {
 			continue
 		}
 
-		log.Info("decoded successfully")
 		if len(decoded) == 1681 { // 840 bytes + starting 0
 			inscription := decoded[1:]
 			stateRoot := common.HexToHash(inscription[64:128])
@@ -580,7 +578,7 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 
 	return logs, nil
 }
-func (s *L1Syncer) getSequencedLogsBTC(startBlock int32, results chan jobResult, stop chan bool, wg *sync.WaitGroup) {
+func (s *L1Syncer) getSequencedLogsBTC(startBlock int32, stop chan bool, wg *sync.WaitGroup) {
 	/* what we need to do here :
 	- construct the two topic logs and pass the to the logs channel
 	- skip this two two topics in the original getSequencedLogs: this is done
@@ -592,18 +590,11 @@ func (s *L1Syncer) getSequencedLogsBTC(startBlock int32, results chan jobResult,
 		case <-stop:
 			return
 		default:
-			log.Info("Starting getting inscriptions")
 			logs, err := s.getInscriptions(startBlock)
 			if err != nil {
 				log.Error("Error getting inscriptions", "error", err)
 			}
-			log.Info("Got inscriptions", "len", len(logs))
 			if err == nil {
-				// results <- jobResult{
-				// 	Size:  0,
-				// 	Error: nil,
-				// 	Logs:  logs,
-				// }
 				s.logsChan <- logs
 			}
 		}
