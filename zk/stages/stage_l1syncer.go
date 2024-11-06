@@ -142,7 +142,6 @@ Loop:
 	for {
 		select {
 		case logs := <-logsChan:
-			log.Info("Got logs in L1Syncer", len(logs))
 			for _, l := range logs {
 				l := l
 				info, batchLogType := parseLogType(cfg.zkCfg.L1RollupId, &l)

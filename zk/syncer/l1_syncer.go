@@ -191,7 +191,7 @@ func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64, syncFromBtc bool) {
 		defer s.isSyncStarted.Store(false)
 		defer s.wgRunLoopDone.Done()
 
-		log.Info("Starting L1 syncer thread")
+		log.Info("Starting L1 syncer thread", "lastChecked", lastCheckedBlock, "syncFromBtc", syncFromBtc)
 		defer log.Info("Stopping L1 syncer thread")
 
 		for {
@@ -206,9 +206,11 @@ func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64, syncFromBtc bool) {
 			} else {
 				latestL1Block, err = s.getLatestL1Block()
 			}
+			log.Info("Latest block", "block", latestL1Block, "syncFromBtc", syncFromBtc)
 			if err != nil {
 				log.Error("Error getting latest L1 block", "err", err)
 			} else {
+				log.Info("Checking for update", "latestL1Block", latestL1Block, "lastCheckedL1Block", s.lastCheckedL1Block.Load())
 				if latestL1Block > s.lastCheckedL1Block.Load() {
 					s.isDownloading.Store(true)
 					if err := s.queryBlocks(syncFromBtc); err != nil {
@@ -525,7 +527,7 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 	// Filter transactions by height
 	filteredTxs := []*indexer.Transaction{}
 	for _, tx := range tnxs {
-		if tx.Height > startBlock {
+		if tx.Height >= startBlock {
 			filteredTxs = append(filteredTxs, tx)
 		}
 	}
@@ -592,6 +594,9 @@ func (s *L1Syncer) getSequencedLogsBTC(startBlock int32, results chan jobResult,
 		default:
 			log.Info("Starting getting inscriptions")
 			logs, err := s.getInscriptions(startBlock)
+			if err != nil {
+				log.Error("Error getting inscriptions", "error", err)
+			}
 			log.Info("Got inscriptions", "len", len(logs))
 			if err == nil {
 				// results <- jobResult{
