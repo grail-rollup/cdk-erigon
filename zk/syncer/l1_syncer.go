@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/gateway-fm/cdk-erigon-lib/common"
+	"github.com/grail-rollup/btcman"
+	"github.com/grail-rollup/btcman/indexer"
 	"github.com/iden3/go-iden3-crypto/keccak256"
 	ethereum "github.com/ledgerwatch/erigon"
 	"github.com/ledgerwatch/log/v3"
@@ -17,6 +19,7 @@ import (
 
 	ethTypes "github.com/ledgerwatch/erigon/core/types"
 	"github.com/ledgerwatch/erigon/rpc"
+	"github.com/ledgerwatch/erigon/zk/contracts"
 )
 
 var (
@@ -61,6 +64,7 @@ type L1Syncer struct {
 	etherMans           []IEtherman
 	ethermanIndex       uint8
 	ethermanMtx         *sync.Mutex
+	btcMan              btcman.Clienter
 	l1ContractAddresses []common.Address
 	topics              [][]common.Hash
 	blockRange          uint64
@@ -69,11 +73,12 @@ type L1Syncer struct {
 	latestL1Block uint64
 
 	// atomic
-	isSyncStarted      atomic.Bool
-	isDownloading      atomic.Bool
-	lastCheckedL1Block atomic.Uint64
-	wgRunLoopDone      sync.WaitGroup
-	flagStop           atomic.Bool
+	isSyncStarted         atomic.Bool
+	isDownloading         atomic.Bool
+	lastCheckedL1Block    atomic.Uint64
+	lastCheckedBtcL1Block atomic.Int32
+	wgRunLoopDone         sync.WaitGroup
+	flagStop              atomic.Bool
 
 	// Channels
 	logsChan         chan []ethTypes.Log
@@ -82,12 +87,13 @@ type L1Syncer struct {
 	highestBlockType string // finalized, latest, safe
 }
 
-func NewL1Syncer(ctx context.Context, etherMans []IEtherman, l1ContractAddresses []common.Address, topics [][]common.Hash, blockRange, queryDelay uint64, highestBlockType string) *L1Syncer {
+func NewL1Syncer(ctx context.Context, etherMans []IEtherman, btcMan btcman.Clienter, l1ContractAddresses []common.Address, topics [][]common.Hash, blockRange, queryDelay uint64, highestBlockType string) *L1Syncer {
 	return &L1Syncer{
 		ctx:                 ctx,
 		etherMans:           etherMans,
 		ethermanIndex:       0,
 		ethermanMtx:         &sync.Mutex{},
+		btcMan:              btcMan,
 		l1ContractAddresses: l1ContractAddresses,
 		topics:              topics,
 		blockRange:          blockRange,
@@ -124,6 +130,10 @@ func (s *L1Syncer) GetLastCheckedL1Block() uint64 {
 	return s.lastCheckedL1Block.Load()
 }
 
+func (s *L1Syncer) GetLastCheckedBtcL1Block() int32 {
+	return s.lastCheckedBtcL1Block.Load()
+}
+
 func (s *L1Syncer) StopQueryBlocks() {
 	s.flagStop.Store(true)
 }
@@ -155,7 +165,7 @@ func (s *L1Syncer) GetProgressMessageChan() chan string {
 	return s.logsChanProgress
 }
 
-func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64) {
+func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64, syncFromBtc bool) {
 	//if already started, don't start another thread
 	if s.isSyncStarted.Load() {
 		return
@@ -175,7 +185,7 @@ func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64) {
 		defer s.isSyncStarted.Store(false)
 		defer s.wgRunLoopDone.Done()
 
-		log.Info("Starting L1 syncer thread")
+		log.Info("Starting L1 syncer thread", "lastChecked", lastCheckedBlock, "syncFromBtc", syncFromBtc)
 		defer log.Info("Stopping L1 syncer thread")
 
 		for {
@@ -183,13 +193,21 @@ func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64) {
 				return
 			}
 
-			latestL1Block, err := s.getLatestL1Block()
+			var latestL1Block uint64
+			var err error
+			if syncFromBtc {
+				latestL1Block, err = s.getLatestBtcL1Block()
+			} else {
+				latestL1Block, err = s.getLatestL1Block()
+			}
+			log.Info("Latest block", "block", latestL1Block, "syncFromBtc", syncFromBtc)
 			if err != nil {
 				log.Error("Error getting latest L1 block", "err", err)
 			} else {
+				log.Info("Checking for update", "latestL1Block", latestL1Block, "lastCheckedL1Block", s.lastCheckedL1Block.Load())
 				if latestL1Block > s.lastCheckedL1Block.Load() {
 					s.isDownloading.Store(true)
-					if err := s.queryBlocks(); err != nil {
+					if err := s.queryBlocks(syncFromBtc); err != nil {
 						log.Error("Error querying blocks", "err", err)
 					} else {
 						s.lastCheckedL1Block.Store(latestL1Block)
@@ -331,12 +349,20 @@ func (s *L1Syncer) getLatestL1Block() (uint64, error) {
 	return latest, nil
 }
 
-func (s *L1Syncer) queryBlocks() error {
+func (s *L1Syncer) getLatestBtcL1Block() (uint64, error) {
+	latest, err := s.btcMan.GetBlockchainHeight()
+	if err != nil {
+		return 0, err
+	}
+
+	return uint64(latest), err
+}
+
+func (s *L1Syncer) queryBlocks(syncFromBtc bool) error {
 	// Fixed receiving duplicate log events.
 	// lastCheckedL1Block means that it has already been checked in the previous cycle.
 	// It should not be checked again in the new cycle, so +1 is added here.
 	startBlock := s.lastCheckedL1Block.Load() + 1
-
 	log.Debug("GetHighestSequence", "startBlock", startBlock)
 
 	// define the blocks we're going to fetch up front
@@ -362,13 +388,21 @@ func (s *L1Syncer) queryBlocks() error {
 
 	wg := sync.WaitGroup{}
 	stop := make(chan bool)
+	stopBTC := make(chan bool)
+
 	jobs := make(chan fetchJob, len(fetches))
+
 	results := make(chan jobResult, len(fetches))
 	defer close(results)
 
 	wg.Add(batchWorkers)
 	for i := 0; i < batchWorkers; i++ {
 		go s.getSequencedLogs(jobs, results, stop, &wg)
+	}
+
+	if syncFromBtc {
+		wg.Add(1)
+		go s.getSequencedLogsBTC(int32(startBlock), stopBTC, &wg)
 	}
 
 	for _, fetch := range fetches {
@@ -417,6 +451,7 @@ loop:
 	}
 
 	close(stop)
+	close(stopBTC)
 	wg.Wait()
 
 	return err
@@ -461,13 +496,104 @@ func (s *L1Syncer) getSequencedLogs(jobs <-chan fetchJob, results chan jobResult
 				}
 				break
 			}
+			filteredLogs := []ethTypes.Log{}
+			for _, l := range logs {
+				if l.Topics[0] != contracts.SequencedBatchTopicEtrog && l.Topics[0] != contracts.VerificationTopicEtrog && l.Topics[0] != contracts.VerificationValidiumTopicEtrog {
+					filteredLogs = append(filteredLogs, l)
+				}
+			}
 			results <- jobResult{
 				Size:  j.To - j.From,
 				Error: nil,
-				Logs:  logs,
+				Logs:  filteredLogs,
 			}
 		}
 	}
+}
+
+func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error error) {
+
+	tnxs, err := s.btcMan.GetHistory()
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter transactions by height
+	filteredTxs := []*indexer.Transaction{}
+	for _, tx := range tnxs {
+		if tx.Height >= startBlock {
+			filteredTxs = append(filteredTxs, tx)
+		}
+	}
+
+	for _, tnx := range filteredTxs {
+		decoded, err := s.btcMan.DecodeInscription(tnx.TxHash)
+		if err != nil || len(decoded) == 0 {
+			continue
+		}
+
+		if len(decoded) == 1681 { // 840 bytes + starting 0
+			inscription := decoded[1:]
+			stateRoot := common.HexToHash(inscription[64:128])
+
+			batchNum := new(big.Int).SetBytes(common.FromHex(inscription[1664:])).Uint64()
+
+			batchNumHash := common.BigToHash(new(big.Int).SetInt64(int64(batchNum)))
+			rollupID := common.BigToHash(new(big.Int).SetInt64(int64(1))) // TODO: change; Default value in kurtosis
+			verificationTopicLog := ethTypes.Log{
+				Topics: []common.Hash{
+					contracts.VerificationTopicEtrog,
+					rollupID,
+				},
+				Data:        append(batchNumHash.Bytes(), stateRoot.Bytes()...),
+				BlockNumber: uint64(tnx.Height),
+				TxHash:      common.HexToHash(tnx.TxHash),
+			}
+			logs = append(logs, verificationTopicLog)
+			log.Info("Got verify inscription", "batch num", batchNum, "stateRoot", stateRoot)
+		} else {
+			inscription := decoded[1:]
+			batchNum := new(big.Int).SetBytes(common.FromHex(inscription[64:80])).Uint64()
+			l1InfoRoot := common.HexToHash(inscription[0:64])
+			batchNumHash := common.BigToHash(new(big.Int).SetInt64(int64(batchNum)))
+			sequencedBatchTopicLog := ethTypes.Log{
+				Topics: []common.Hash{
+					contracts.SequencedBatchTopicEtrog,
+					batchNumHash,
+				},
+				Data:        l1InfoRoot.Bytes(),
+				BlockNumber: uint64(tnx.Height),
+				TxHash:      common.HexToHash(tnx.TxHash),
+			}
+			logs = append(logs, sequencedBatchTopicLog)
+			log.Info("Got sequence inscription", "batch num", batchNum, "l1InfoRoot", l1InfoRoot)
+		}
+	}
+
+	return logs, nil
+}
+func (s *L1Syncer) getSequencedLogsBTC(startBlock int32, stop chan bool, wg *sync.WaitGroup) {
+	/* what we need to do here :
+	- construct the two topic logs and pass the to the logs channel
+	- skip this two two topics in the original getSequencedLogs: this is done
+	- update parsing logic for this two events
+	*/
+	defer wg.Done()
+	for {
+		select {
+		case <-stop:
+			return
+		default:
+			logs, err := s.getInscriptions(startBlock)
+			if err != nil {
+				log.Error("Error getting inscriptions", "error", err)
+			}
+			if err == nil {
+				s.logsChan <- logs
+			}
+		}
+	}
+
 }
 
 // calls the old rollup contract to get the accInputHash for a certain batch

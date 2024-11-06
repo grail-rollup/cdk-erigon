@@ -30,6 +30,7 @@ type IL1Syncer interface {
 	IsSyncStarted() bool
 	IsDownloading() bool
 	GetLastCheckedL1Block() uint64
+	GetLastCheckedBtcL1Block() int32
 
 	// Channels
 	GetLogsChan() chan []ethTypes.Log
@@ -38,7 +39,7 @@ type IL1Syncer interface {
 	L1QueryHeaders(logs []ethTypes.Log) (map[uint64]*ethTypes.Header, error)
 	GetBlock(number uint64) (*ethTypes.Block, error)
 	GetHeader(number uint64) (*ethTypes.Header, error)
-	RunQueryBlocks(lastCheckedBlock uint64)
+	RunQueryBlocks(lastCheckedBlock uint64, syncFromBtc bool)
 	StopQueryBlocks()
 	ConsumeQueryBlocks()
 	WaitQueryBlocksToFinish()
@@ -116,7 +117,7 @@ func SpawnStageL1Syncer(
 		}
 
 		// start the syncer
-		cfg.syncer.RunQueryBlocks(l1BlockProgress)
+		cfg.syncer.RunQueryBlocks(l1BlockProgress, true)
 		defer func() {
 			if funcErr != nil {
 				cfg.syncer.StopQueryBlocks()
@@ -144,6 +145,7 @@ Loop:
 				case logSequence:
 					fallthrough
 				case logSequenceEtrog:
+					log.Info("Ethereum sequence batch", "L1InfoRoot", info.L1InfoRoot, "Batch num", info.BatchNo, "L1BlockNo", info.L1BlockNo, "L1TxHash", info.L1TxHash)
 					// prevent storing pre-etrog sequences for etrog rollups
 					if batchLogType == logSequence && cfg.zkCfg.L1RollupId > 1 {
 						continue
@@ -167,6 +169,7 @@ Loop:
 				case logVerify:
 					fallthrough
 				case logVerifyEtrog:
+					log.Info("Ethereum verify batch", "StateRoot", info.StateRoot, "Batch num", info.BatchNo, "L1BlockNo", info.L1BlockNo, "L1TxHash", info.L1TxHash)
 					// prevent storing pre-etrog verifications for etrog rollups
 					if batchLogType == logVerify && cfg.zkCfg.L1RollupId > 1 {
 						continue

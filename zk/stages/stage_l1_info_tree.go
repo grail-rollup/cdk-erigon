@@ -70,7 +70,7 @@ func SpawnL1InfoTreeStage(
 	}
 
 	if !cfg.syncer.IsSyncStarted() {
-		cfg.syncer.RunQueryBlocks(progress)
+		cfg.syncer.RunQueryBlocks(progress, false)
 		defer func() {
 			if funcErr != nil {
 				cfg.syncer.StopQueryBlocks()

@@ -257,6 +257,13 @@ type Config struct {
 
 	//[zkevm]
 	*Zk
+
+	// btcman
+	BtcPublicKey   string
+	BtcNet         string
+	BtcIndexerHost string
+	BtcIndexerPort string
+	BtcMode        string
 }
 
 type Sync struct {
