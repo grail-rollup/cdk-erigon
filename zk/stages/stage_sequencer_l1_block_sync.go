@@ -45,6 +45,7 @@ func SpawnSequencerL1BlockSyncStage(
 	cfg SequencerL1BlockSyncCfg,
 	quiet bool,
 ) (funcErr error) {
+	const syncFromBtc = false // TODO: maybe move to config StageSequencerL1BlockSyncCfg?
 	logPrefix := s.LogPrefix()
 	log.Info(fmt.Sprintf("[%s] Starting L1 block sync stage", logPrefix))
 	defer log.Info(fmt.Sprintf("[%s] Finished L1 block sync stage", logPrefix))
@@ -114,7 +115,7 @@ func SpawnSequencerL1BlockSyncStage(
 	}
 
 	if !cfg.syncer.IsSyncStarted() {
-		cfg.syncer.RunQueryBlocks(l1BlockHeight, false)
+		cfg.syncer.RunQueryBlocks(l1BlockHeight, syncFromBtc)
 		defer func() {
 			if funcErr != nil {
 				cfg.syncer.StopQueryBlocks()

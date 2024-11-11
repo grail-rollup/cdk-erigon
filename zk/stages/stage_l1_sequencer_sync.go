@@ -43,6 +43,7 @@ func SpawnL1SequencerSyncStage(
 	ctx context.Context,
 	quiet bool,
 ) (funcErr error) {
+	const syncFromBtc = false // TODO: maybe move to config StageL1SequencerSyncCfg?
 	logPrefix := s.LogPrefix()
 	log.Info(fmt.Sprintf("[%s] Starting L1 Sequencer sync stage", logPrefix))
 	defer log.Info(fmt.Sprintf("[%s] Finished L1 Sequencer sync stage", logPrefix))
@@ -90,7 +91,7 @@ func SpawnL1SequencerSyncStage(
 	hermezDb := hermez_db.NewHermezDb(tx)
 
 	if !cfg.syncer.IsSyncStarted() {
-		cfg.syncer.RunQueryBlocks(progress, false)
+		cfg.syncer.RunQueryBlocks(progress, syncFromBtc)
 		defer func() {
 			if funcErr != nil {
 				cfg.syncer.StopQueryBlocks()
@@ -107,7 +108,7 @@ Loop:
 	for {
 		select {
 		case logs := <-logChan:
-			headersMap, err := cfg.syncer.L1QueryHeaders(logs)
+			headersMap, err := cfg.syncer.L1QueryHeaders(logs, syncFromBtc)
 			if err != nil {
 				funcErr = err
 				return funcErr
@@ -117,7 +118,7 @@ Loop:
 				header := headersMap[l.BlockNumber]
 				switch l.Topics[0] {
 				case contracts.InitialSequenceBatchesTopic:
-					if funcErr = HandleInitialSequenceBatches(cfg.syncer, hermezDb, l, header); funcErr != nil {
+					if funcErr = HandleInitialSequenceBatches(cfg.syncer, hermezDb, l, header, syncFromBtc); funcErr != nil {
 						return funcErr
 					}
 				case contracts.AddNewRollupTypeTopic:
@@ -251,11 +252,12 @@ func HandleInitialSequenceBatches(
 	db *hermez_db.HermezDb,
 	l ethTypes.Log,
 	header *ethTypes.Header,
+	syncFromBtc bool,
 ) error {
 	var err error
 
 	if header == nil {
-		header, err = syncer.GetHeader(l.BlockNumber)
+		header, err = syncer.GetHeader(l.BlockNumber, syncFromBtc)
 		if err != nil {
 			return err
 		}

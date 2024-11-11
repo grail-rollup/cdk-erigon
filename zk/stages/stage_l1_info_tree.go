@@ -40,6 +40,7 @@ func SpawnL1InfoTreeStage(
 	ctx context.Context,
 	quiet bool,
 ) (funcErr error) {
+	const syncFromBtc = false // TODO: maybe move to config L1InfoTreeCfg?
 	logPrefix := s.LogPrefix()
 	log.Info(fmt.Sprintf("[%s] Starting L1 Info Tree stage", logPrefix))
 	defer log.Info(fmt.Sprintf("[%s] Finished L1 Info Tree stage", logPrefix))
@@ -70,7 +71,7 @@ func SpawnL1InfoTreeStage(
 	}
 
 	if !cfg.syncer.IsSyncStarted() {
-		cfg.syncer.RunQueryBlocks(progress, false)
+		cfg.syncer.RunQueryBlocks(progress, syncFromBtc)
 		defer func() {
 			if funcErr != nil {
 				cfg.syncer.StopQueryBlocks()
@@ -135,7 +136,7 @@ LOOP:
 		default:
 		}
 
-		headersMap, err := cfg.syncer.L1QueryHeaders(chunk)
+		headersMap, err := cfg.syncer.L1QueryHeaders(chunk, syncFromBtc)
 		if err != nil {
 			funcErr = err
 			return funcErr
@@ -146,7 +147,7 @@ LOOP:
 			case contracts.UpdateL1InfoTreeTopic:
 				header := headersMap[l.BlockNumber]
 				if header == nil {
-					header, funcErr = cfg.syncer.GetHeader(l.BlockNumber)
+					header, funcErr = cfg.syncer.GetHeader(l.BlockNumber, syncFromBtc)
 					if funcErr != nil {
 						return funcErr
 					}

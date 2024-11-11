@@ -412,8 +412,8 @@ github.com/gorilla/mux v1.6.2/go.mod h1:1lud6UwP+6orDFRuTfBEV8e9/aOM/c4fVVCaMa2z
 github.com/gorilla/websocket v1.4.1/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
 github.com/gorilla/websocket v1.5.0 h1:PPwGk2jz7EePpoHN/+ClbZu8SPxiqlu12wZP/3sWmnc=
 github.com/gorilla/websocket v1.5.0/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
-github.com/grail-rollup/btcman v0.0.1 h1:VcZO6l3UndPc40j9Psbaot8cGEu4SKEfZMUOU/l898s=
-github.com/grail-rollup/btcman v0.0.1/go.mod h1:UIQyaUZOARfLzKZN/AcNwuiUdmxks5MLm9ixIvJwBJY=
+github.com/grail-rollup/btcman v0.0.3 h1:rtryjIm0SkHEbYGiofcygaGlt6G+/lP0pnOvvt/e5pE=
+github.com/grail-rollup/btcman v0.0.3/go.mod h1:CB2OPU23OuRTw2gi+2tFUdgLkV8NI4994fMmle8Scu8=
 github.com/gregjones/httpcache v0.0.0-20180305231024-9cad4c3443a7/go.mod h1:FecbI9+v66THATjSRHfNgh1IVFe/9kFxbXtjV0ctIMA=
 github.com/grpc-ecosystem/go-grpc-middleware v1.4.0 h1:UH//fgunKIs4JdUbpDl1VZCDaL56wXCB/5+wF6uHfaI=
 github.com/grpc-ecosystem/go-grpc-middleware v1.4.0/go.mod h1:g5qyo/la0ALbONm6Vbp88Yd8NsDy6rZz+RcrMPxvld8=
