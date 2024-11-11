@@ -221,12 +221,11 @@ func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64, syncFromBtc bool) {
 }
 
 func (s *L1Syncer) GetHeader(number uint64, syncFromBtc bool) (*ethTypes.Header, error) {
-	if syncFromBtc == true {
+	if syncFromBtc {
 		return s.getBtcHeader(number)
-	} else {
-		em := s.getNextEtherman()
-		return em.HeaderByNumber(context.Background(), new(big.Int).SetUint64(number))
 	}
+	em := s.getNextEtherman()
+	return em.HeaderByNumber(context.Background(), new(big.Int).SetUint64(number))
 }
 
 func (s *L1Syncer) GetBlock(number uint64) (*ethTypes.Block, error) {
@@ -299,7 +298,7 @@ func (s *L1Syncer) L1QueryHeaders(logs []ethTypes.Log, syncFromBtc bool) (map[ui
 
 			var header *ethTypes.Header
 			var err error
-			if syncFromBtc == true {
+			if syncFromBtc {
 				header, err = s.getBtcHeader(l.BlockNumber)
 			} else {
 				header, err = em.HeaderByNumber(ctx, new(big.Int).SetUint64(l.BlockNumber))

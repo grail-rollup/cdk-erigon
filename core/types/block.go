@@ -533,9 +533,8 @@ func (h *Header) SetExcessDataGas(v *big.Int) {
 func (h *Header) Hash() libcommon.Hash {
 	if h.BtcHash != nil {
 		return *h.BtcHash
-	} else {
-		return rlpHash(h)
 	}
+	return rlpHash(h)
 }
 
 func (h *Header) ZkHash() libcommon.Hash {
