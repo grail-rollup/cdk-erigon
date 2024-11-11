@@ -29,10 +29,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gballet/go-verkle"
 	libcommon "github.com/gateway-fm/cdk-erigon-lib/common"
 	"github.com/gateway-fm/cdk-erigon-lib/common/hexutility"
 	rlp2 "github.com/gateway-fm/cdk-erigon-lib/rlp"
+	"github.com/gballet/go-verkle"
 
 	"github.com/ledgerwatch/erigon/common"
 	"github.com/ledgerwatch/erigon/common/hexutil"
@@ -104,6 +104,9 @@ type Header struct {
 	Verkle        bool
 	VerkleProof   []byte
 	VerkleKeyVals []verkle.KeyValuePair
+
+	// BTC data
+	BtcHash *libcommon.Hash
 }
 
 // ParentExcessDataGas is a helper that returns the excess data gas value of the parent block.  It
@@ -528,6 +531,9 @@ func (h *Header) SetExcessDataGas(v *big.Int) {
 // Hash returns the block hash of the header, which is simply the keccak256 hash of its
 // RLP encoding.
 func (h *Header) Hash() libcommon.Hash {
+	if h.BtcHash != nil {
+		return *h.BtcHash
+	}
 	return rlpHash(h)
 }
 

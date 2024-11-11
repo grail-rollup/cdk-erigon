@@ -10,7 +10,6 @@ import (
 
 	"github.com/gateway-fm/cdk-erigon-lib/common"
 	"github.com/grail-rollup/btcman"
-	"github.com/grail-rollup/btcman/indexer"
 	"github.com/iden3/go-iden3-crypto/keccak256"
 	ethereum "github.com/ledgerwatch/erigon"
 	"github.com/ledgerwatch/log/v3"
@@ -221,7 +220,10 @@ func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64, syncFromBtc bool) {
 	}()
 }
 
-func (s *L1Syncer) GetHeader(number uint64) (*ethTypes.Header, error) {
+func (s *L1Syncer) GetHeader(number uint64, syncFromBtc bool) (*ethTypes.Header, error) {
+	if syncFromBtc {
+		return s.getBtcHeader(number)
+	}
 	em := s.getNextEtherman()
 	return em.HeaderByNumber(context.Background(), new(big.Int).SetUint64(number))
 }
@@ -271,7 +273,7 @@ func (s *L1Syncer) GetL1BlockTimeStampByTxHash(ctx context.Context, txHash commo
 	return header.Time, nil
 }
 
-func (s *L1Syncer) L1QueryHeaders(logs []ethTypes.Log) (map[uint64]*ethTypes.Header, error) {
+func (s *L1Syncer) L1QueryHeaders(logs []ethTypes.Log, syncFromBtc bool) (map[uint64]*ethTypes.Header, error) {
 	logsSize := len(logs)
 
 	// queue up all the logs
@@ -293,7 +295,15 @@ func (s *L1Syncer) L1QueryHeaders(logs []ethTypes.Log) (map[uint64]*ethTypes.Hea
 			if !ok {
 				break
 			}
-			header, err := em.HeaderByNumber(ctx, new(big.Int).SetUint64(l.BlockNumber))
+
+			var header *ethTypes.Header
+			var err error
+			if syncFromBtc {
+				header, err = s.getBtcHeader(l.BlockNumber)
+			} else {
+				header, err = em.HeaderByNumber(ctx, new(big.Int).SetUint64(l.BlockNumber))
+			}
+
 			if err != nil {
 				log.Error("Error getting block", "err", err)
 				// assume a transient error and try again
@@ -322,6 +332,24 @@ func (s *L1Syncer) L1QueryHeaders(logs []ethTypes.Log) (map[uint64]*ethTypes.Hea
 	}
 
 	return headersMap, nil
+}
+
+func (s *L1Syncer) getBtcHeader(number uint64) (*ethTypes.Header, error) {
+	btcHeader, err := s.btcMan.GetBlockHeader(number)
+	if err != nil {
+		return nil, err
+	}
+
+	// TODO: can we pass the btcHash directly?
+	hash := btcHeader.BlockHash()
+	btcHash := common.CastToHash(hash[:])
+	header := ethTypes.Header{
+		ParentHash: common.Hash(btcHeader.PrevBlock),
+		Number:     new(big.Int).SetUint64(number),
+		Time:       uint64(btcHeader.Timestamp.Unix()),
+		BtcHash:    &btcHash,
+	}
+	return &header, nil
 }
 
 func (s *L1Syncer) getLatestL1Block() (uint64, error) {
@@ -513,26 +541,23 @@ func (s *L1Syncer) getSequencedLogs(jobs <-chan fetchJob, results chan jobResult
 
 func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error error) {
 
-	tnxs, err := s.btcMan.GetHistory()
+	tnxs, err := s.btcMan.GetHistory(int(startBlock), false)
 	if err != nil {
 		return nil, err
 	}
 
-	// Filter transactions by height
-	filteredTxs := []*indexer.Transaction{}
-	for _, tx := range tnxs {
-		if tx.Height >= startBlock {
-			filteredTxs = append(filteredTxs, tx)
-		}
-	}
-
-	for _, tnx := range filteredTxs {
+	for _, tnx := range tnxs {
 		decoded, err := s.btcMan.DecodeInscription(tnx.TxHash)
 		if err != nil || len(decoded) == 0 {
 			continue
 		}
 
 		if len(decoded) == 1681 { // 840 bytes + starting 0
+			// Verify message
+			// [0:64] newExitRoot
+			// [64:128] stateRoot
+			// [128:1664] proof
+			// [1664:1680] lastBatchNum
 			inscription := decoded[1:]
 			stateRoot := common.HexToHash(inscription[64:128])
 
@@ -552,6 +577,9 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 			logs = append(logs, verificationTopicLog)
 			log.Info("Got verify inscription", "batch num", batchNum, "stateRoot", stateRoot)
 		} else {
+			// Sequence message
+			// [0:64] l1ExitRoot
+			// [64:80] lastBatchNum
 			inscription := decoded[1:]
 			batchNum := new(big.Int).SetBytes(common.FromHex(inscription[64:80])).Uint64()
 			l1InfoRoot := common.HexToHash(inscription[0:64])
@@ -572,6 +600,7 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 
 	return logs, nil
 }
+
 func (s *L1Syncer) getSequencedLogsBTC(startBlock int32, stop chan bool, wg *sync.WaitGroup) {
 	/* what we need to do here :
 	- construct the two topic logs and pass the to the logs channel

@@ -36,9 +36,9 @@ type IL1Syncer interface {
 	GetLogsChan() chan []ethTypes.Log
 	GetProgressMessageChan() chan string
 
-	L1QueryHeaders(logs []ethTypes.Log) (map[uint64]*ethTypes.Header, error)
+	L1QueryHeaders(logs []ethTypes.Log, syncFromBtc bool) (map[uint64]*ethTypes.Header, error)
 	GetBlock(number uint64) (*ethTypes.Block, error)
-	GetHeader(number uint64) (*ethTypes.Header, error)
+	GetHeader(number uint64, syncFromBtc bool) (*ethTypes.Header, error)
 	RunQueryBlocks(lastCheckedBlock uint64, syncFromBtc bool)
 	StopQueryBlocks()
 	ConsumeQueryBlocks()
@@ -75,6 +75,7 @@ func SpawnStageL1Syncer(
 	cfg L1SyncerCfg,
 	quiet bool,
 ) (funcErr error) {
+	const syncFromBtc = true // TODO: maybe move to config StageL1SyncerCfg?
 	///// DEBUG BISECT /////
 	if cfg.zkCfg.DebugLimit > 0 {
 		return nil
@@ -117,7 +118,7 @@ func SpawnStageL1Syncer(
 		}
 
 		// start the syncer
-		cfg.syncer.RunQueryBlocks(l1BlockProgress, true)
+		cfg.syncer.RunQueryBlocks(l1BlockProgress, syncFromBtc)
 		defer func() {
 			if funcErr != nil {
 				cfg.syncer.StopQueryBlocks()
