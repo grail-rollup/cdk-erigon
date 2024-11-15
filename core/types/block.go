@@ -531,9 +531,9 @@ func (h *Header) SetExcessDataGas(v *big.Int) {
 // Hash returns the block hash of the header, which is simply the keccak256 hash of its
 // RLP encoding.
 func (h *Header) Hash() libcommon.Hash {
-	if h.BtcHash != nil {
-		return *h.BtcHash
-	}
+	// if h.BtcHash != nil {
+	// 	return *h.BtcHash
+	// }
 	return rlpHash(h)
 }
 

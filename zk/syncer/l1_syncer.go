@@ -295,6 +295,7 @@ func (s *L1Syncer) L1QueryHeaders(logs []ethTypes.Log, syncFromBtc bool) (map[ui
 			if !ok {
 				break
 			}
+			log.Info("Called L1QueryHeaders", "number", l.BlockNumber)
 
 			var header *ethTypes.Header
 			var err error
@@ -526,7 +527,15 @@ func (s *L1Syncer) getSequencedLogs(jobs <-chan fetchJob, results chan jobResult
 			}
 			filteredLogs := []ethTypes.Log{}
 			for _, l := range logs {
-				if l.Topics[0] != contracts.SequencedBatchTopicEtrog && l.Topics[0] != contracts.VerificationTopicEtrog && l.Topics[0] != contracts.VerificationValidiumTopicEtrog {
+				log.Info("Got event", "topic", l.Topics[0], "needed", contracts.UpdateL1InfoTreeTopic)
+				if l.Topics[0] == contracts.UpdateL1InfoTreeTopic {
+					log.Info("Ignoring UpdateL1InfoTreeTopic", "topic 1", l.Topics[1], "topic 2", l.Topics[2])
+				}
+
+				if l.Topics[0] != contracts.SequencedBatchTopicEtrog &&
+					l.Topics[0] != contracts.VerificationTopicEtrog &&
+					l.Topics[0] != contracts.VerificationValidiumTopicEtrog &&
+					l.Topics[0] != contracts.UpdateL1InfoTreeTopic {
 					filteredLogs = append(filteredLogs, l)
 				}
 			}
@@ -559,12 +568,15 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 			// [128:1664] proof
 			// [1664:1680] lastBatchNum
 			inscription := decoded[1:]
+			newExitRoot := common.HexToHash(inscription[0:64])
 			stateRoot := common.HexToHash(inscription[64:128])
 
 			batchNum := new(big.Int).SetBytes(common.FromHex(inscription[1664:])).Uint64()
 
 			batchNumHash := common.BigToHash(new(big.Int).SetInt64(int64(batchNum)))
 			rollupID := common.BigToHash(new(big.Int).SetInt64(int64(1))) // TODO: change; Default value in kurtosis
+
+			// Create verificationTopicLog and updateL1InfoTreeTopicLog
 			verificationTopicLog := ethTypes.Log{
 				Topics: []common.Hash{
 					contracts.VerificationTopicEtrog,
@@ -574,7 +586,18 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 				BlockNumber: uint64(tnx.Height),
 				TxHash:      common.HexToHash(tnx.TxHash),
 			}
-			logs = append(logs, verificationTopicLog)
+
+			updateL1InfoTreeTopicLog := ethTypes.Log{
+				Topics: []common.Hash{
+					contracts.UpdateL1InfoTreeTopic,
+					common.BigToHash(new(big.Int).SetInt64(int64(0))), // Hardcoded to 0 until the bridge is ready
+					newExitRoot,
+				},
+				BlockNumber: uint64(tnx.Height),
+				TxHash:      common.HexToHash(tnx.TxHash),
+			}
+
+			logs = append(logs, verificationTopicLog, updateL1InfoTreeTopicLog)
 			log.Info("Got verify inscription", "batch num", batchNum, "stateRoot", stateRoot)
 		} else {
 			// Sequence message

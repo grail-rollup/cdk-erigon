@@ -209,6 +209,7 @@ func CreateL1InfoTreeUpdate(l ethTypes.Log, header *ethTypes.Header) (*types.L1I
 		return nil, errors.New("received log for info tree that did not match the block number")
 	}
 
+	log.Info("Creating UpdateL1InfoTreeTopic", "topic 1", l.Topics[1], "topic 2", l.Topics[2])
 	mainnetExitRoot := l.Topics[1]
 	rollupExitRoot := l.Topics[2]
 	combined := append(mainnetExitRoot.Bytes(), rollupExitRoot.Bytes()...)

@@ -145,6 +145,7 @@ LOOP:
 		for _, l := range chunk {
 			switch l.Topics[0] {
 			case contracts.UpdateL1InfoTreeTopic:
+				log.Info("Got UpdateL1InfoTreeTopic", "topic 1", l.Topics[1], "topic 2", l.Topics[2])
 				header := headersMap[l.BlockNumber]
 				if header == nil {
 					header, funcErr = cfg.syncer.GetHeader(l.BlockNumber, syncFromBtc)
