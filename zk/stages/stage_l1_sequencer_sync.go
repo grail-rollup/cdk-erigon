@@ -43,7 +43,7 @@ func SpawnL1SequencerSyncStage(
 	ctx context.Context,
 	quiet bool,
 ) (funcErr error) {
-	const syncFromBtc = false // TODO: maybe move to config StageL1SequencerSyncCfg?
+	const syncFromBtc = true // TODO: maybe move to config StageL1SequencerSyncCfg?
 	logPrefix := s.LogPrefix()
 	log.Info(fmt.Sprintf("[%s] Starting L1 Sequencer sync stage", logPrefix))
 	defer log.Info(fmt.Sprintf("[%s] Finished L1 Sequencer sync stage", logPrefix))
@@ -68,7 +68,6 @@ func SpawnL1SequencerSyncStage(
 	}
 	if progress == 0 {
 		progress = cfg.zkCfg.L1FirstBlock - 1
-
 	}
 
 	// if the flag is set - wait for that block to be finalized on L1 before continuing
