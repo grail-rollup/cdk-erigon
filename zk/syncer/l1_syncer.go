@@ -13,6 +13,7 @@ import (
 	"github.com/iden3/go-iden3-crypto/keccak256"
 	ethereum "github.com/ledgerwatch/erigon"
 	"github.com/ledgerwatch/log/v3"
+	"golang.org/x/crypto/sha3"
 
 	"encoding/binary"
 	"encoding/hex"
@@ -86,23 +87,27 @@ type L1Syncer struct {
 
 	highestBlockType string // finalized, latest, safe
 
-	hasSentInitLogs    atomic.Bool
+	hasSentInitLogs        atomic.Bool
+	stateRootByBlockNumber map[uint64]common.Hash
+	lastLocalExitRoot      atomic.Value
 }
 
 func NewL1Syncer(ctx context.Context, etherMans []IEtherman, btcMan btcman.Clienter, l1ContractAddresses []common.Address, topics [][]common.Hash, blockRange, queryDelay uint64, highestBlockType string) *L1Syncer {
 	return &L1Syncer{
-		ctx:                 ctx,
-		etherMans:           etherMans,
-		ethermanIndex:       0,
-		ethermanMtx:         &sync.Mutex{},
-		btcMan:              btcMan,
-		l1ContractAddresses: l1ContractAddresses,
-		topics:              topics,
-		blockRange:          blockRange,
-		queryDelay:          queryDelay,
-		logsChan:            make(chan []ethTypes.Log),
-		logsChanProgress:    make(chan string),
-		highestBlockType:    highestBlockType,
+		ctx:                    ctx,
+		etherMans:              etherMans,
+		ethermanIndex:          0,
+		ethermanMtx:            &sync.Mutex{},
+		btcMan:                 btcMan,
+		l1ContractAddresses:    l1ContractAddresses,
+		topics:                 topics,
+		blockRange:             blockRange,
+		queryDelay:             queryDelay,
+		logsChan:               make(chan []ethTypes.Log),
+		logsChanProgress:       make(chan string),
+		highestBlockType:       highestBlockType,
+		stateRootByBlockNumber: make(map[uint64]common.Hash),
+		lastLocalExitRoot:      atomic.Value{},
 	}
 }
 
@@ -351,6 +356,7 @@ func (s *L1Syncer) getBtcHeader(number uint64) (*ethTypes.Header, error) {
 		Number:     new(big.Int).SetUint64(number),
 		Time:       uint64(btcHeader.Timestamp.Unix()),
 		BtcHash:    &btcHash,
+		Root:       s.stateRootByBlockNumber[number],
 	}
 	return &header, nil
 }
@@ -538,18 +544,6 @@ func (s *L1Syncer) getSequencedLogs(jobs <-chan fetchJob, results chan jobResult
 				initialSequenceBatchesLog := s.generateInitialSequenceBatchesTopicLog()
 				filteredLogs = append(filteredLogs, initialSequenceBatchesLog)
 
-				// TODO: remove this once we have the bridge logic for handling exit roots
-				l1UpdateInfoTreeLog := ethTypes.Log{
-					Topics: []common.Hash{
-						contracts.UpdateL1InfoTreeTopic,
-						common.HexToHash("0x00"),
-						common.HexToHash("0x27ae5ba08d7291c96c8cbddcc148bf48a6d68c7974b94356f53754ef6171d757"),
-					},
-					BlockNumber: 1,
-					TxHash:      common.HexToHash("0x01"),
-				}
-				filteredLogs = append(filteredLogs, l1UpdateInfoTreeLog)
-
 				s.hasSentInitLogs.Store(true)
 			}
 			for _, l := range logs {
@@ -624,8 +618,8 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 				"newAccountInputHash", newAccountInputHash,
 				"proof", proof)
 
+			s.stateRootByBlockNumber[uint64(tnx.Height)] = newStateRoot
 			// TODO: verify proof here using the verifier
-
 
 			rollupID := common.BigToHash(new(big.Int).SetInt64(int64(1))) // TODO: change; Default value in kurtosis
 			verificationTopicLog := ethTypes.Log{
@@ -637,7 +631,24 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 				BlockNumber: uint64(tnx.Height),
 				TxHash:      common.HexToHash(tnx.TxHash),
 			}
-			logs = append(logs, verificationTopicLog)
+
+			lastExitRoot := s.lastLocalExitRoot.Load()
+			if lastExitRoot == nil || lastExitRoot.(common.Hash) != newLocalExitRoot {
+				s.lastLocalExitRoot.Store(newLocalExitRoot)
+				l1UpdateInfoTreeLog := ethTypes.Log{
+					Topics: []common.Hash{
+						contracts.UpdateL1InfoTreeTopic,
+						common.HexToHash("0x00"),
+						calculateRollupExitRoot(newLocalExitRoot),
+					},
+					BlockNumber: 1,
+					TxHash:      common.HexToHash("0x01"),
+				}
+				logs = append(logs, verificationTopicLog, l1UpdateInfoTreeLog)
+			} else {
+				logs = append(logs, verificationTopicLog)
+			}
+
 		} else {
 			// Sequence message
 			// [0:64] l1ExitRoot
@@ -887,4 +898,23 @@ func (s *L1Syncer) CheckL1BlockFinalized(blockNo uint64) (finalized bool, finali
 	}
 
 	return block.NumberU64() >= blockNo, block.NumberU64(), nil
+}
+
+func calculateRollupExitRoot(currentRoot common.Hash) common.Hash {
+	currentZeroHashHeight := [32]byte{}
+	remainingLevels := 32
+
+	for i := 0; i < remainingLevels; i++ {
+		hasher := sha3.NewLegacyKeccak256()
+		hasher.Write(currentRoot[:])
+		hasher.Write(currentZeroHashHeight[:])
+		copy(currentRoot[:], hasher.Sum(nil))
+
+		hasher.Reset()
+		hasher.Write(currentZeroHashHeight[:])
+		hasher.Write(currentZeroHashHeight[:])
+		copy(currentZeroHashHeight[:], hasher.Sum(nil))
+	}
+
+	return common.BytesToHash(currentRoot[:])
 }
