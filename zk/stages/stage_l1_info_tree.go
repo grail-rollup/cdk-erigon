@@ -40,7 +40,7 @@ func SpawnL1InfoTreeStage(
 	ctx context.Context,
 	quiet bool,
 ) (funcErr error) {
-	const syncFromBtc = false // TODO: maybe move to config L1InfoTreeCfg?
+	const syncFromBtc = true // TODO: maybe move to config L1InfoTreeCfg?
 	logPrefix := s.LogPrefix()
 	log.Info(fmt.Sprintf("[%s] Starting L1 Info Tree stage", logPrefix))
 	defer log.Info(fmt.Sprintf("[%s] Finished L1 Info Tree stage", logPrefix))
