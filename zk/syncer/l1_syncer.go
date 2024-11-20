@@ -590,8 +590,8 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 			// [32:96] newLocalExitRoot
 			// [96:160] oldStateRoot
 			// [160:224] newStateRoot
-			// [224:288] oldAccountInputHash
-			// [288:352] newAccountInputHash
+			// [224:288] oldAccumulatedInputHash
+			// [288:352] newAccumulatedInputHash
 			// [352:] proof
 			inscription := decoded[1:]
 
@@ -604,8 +604,8 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 			newLocalExitRoot := common.HexToHash(inscription[32:96])
 			oldStateRoot := common.HexToHash(inscription[96:160])
 			newStateRoot := common.HexToHash(inscription[160:224])
-			oldAccountInputHash := common.HexToHash(inscription[224:288])
-			newAccountInputHash := common.HexToHash(inscription[288:352])
+			oldAccumulatedInputHash := common.HexToHash(inscription[224:288])
+			newAccumulatedInputHash := common.HexToHash(inscription[288:352])
 			proof := inscription[352:]
 
 			log.Info("Got verify inscription",
@@ -614,8 +614,8 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 				"newLocalExitRoot", newLocalExitRoot,
 				"oldStateRoot", oldStateRoot,
 				"newStateRoot", newStateRoot,
-				"oldAccountInputHash", oldAccountInputHash,
-				"newAccountInputHash", newAccountInputHash,
+				"oldAccumulatedInputHash", oldAccumulatedInputHash,
+				"newAccumulatedInputHash", newAccumulatedInputHash,
 				"proof", proof)
 
 			s.stateRootByBlockNumber[uint64(tnx.Height)] = newStateRoot
