@@ -216,10 +216,11 @@ func ApplyFlagsForZkConfig(ctx *cli.Context, cfg *ethconfig.Config) {
 		}
 	}
 
-	checkFlag(utils.AddressSequencerFlag.Name, cfg.AddressSequencer)
-	checkFlag(utils.AddressRollupFlag.Name, cfg.AddressRollup)
-	checkFlag(utils.AddressZkevmFlag.Name, cfg.AddressZkevm)
-	checkFlag(utils.AddressGerManagerFlag.Name, cfg.AddressGerManager)
+	// Not needed when syncing from BTC
+	// checkFlag(utils.AddressSequencerFlag.Name, cfg.AddressSequencer)
+	// checkFlag(utils.AddressRollupFlag.Name, cfg.AddressRollup)
+	// checkFlag(utils.AddressZkevmFlag.Name, cfg.AddressZkevm)
+	// checkFlag(utils.AddressGerManagerFlag.Name, cfg.AddressGerManager)
 
 	checkFlag(utils.L1ChainIdFlag.Name, cfg.L1ChainId)
 	checkFlag(utils.L1RpcUrlFlag.Name, cfg.L1RpcUrl)
