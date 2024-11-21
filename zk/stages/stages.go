@@ -74,32 +74,32 @@ func SequencerZkStages(
 				return PruneL1SequencerSyncStage(p, tx, l1SequencerSyncCfg, ctx)
 			},
 		},
-		{
-			ID:          stages2.L1InfoTree,
-			Description: "L1 Info tree index updates sync",
-			Forward: func(firstCycle bool, badBlockUnwind bool, s *stages.StageState, u stages.Unwinder, tx kv.RwTx, quiet bool) error {
-				return SpawnL1InfoTreeStage(s, u, tx, l1InfoTreeCfg, ctx, quiet)
-			},
-			Unwind: func(firstCycle bool, u *stages.UnwindState, s *stages.StageState, tx kv.RwTx) error {
-				return UnwindL1InfoTreeStage(u, tx, l1InfoTreeCfg, ctx)
-			},
-			Prune: func(firstCycle bool, p *stages.PruneState, tx kv.RwTx) error {
-				return PruneL1InfoTreeStage(p, tx, l1InfoTreeCfg, ctx)
-			},
-		},
-		{
-			ID:          stages2.L1BlockSync,
-			Description: "L1 Sequencer L1 Block Sync",
-			Forward: func(firstCycle bool, badBlockUnwind bool, s *stages.StageState, unwinder stages.Unwinder, tx kv.RwTx, quiet bool) error {
-				return SpawnSequencerL1BlockSyncStage(s, unwinder, ctx, tx, sequencerL1BlockSyncCfg, quiet)
-			},
-			Unwind: func(firstCycle bool, u *stages.UnwindState, s *stages.StageState, tx kv.RwTx) error {
-				return UnwindSequencerL1BlockSyncStage(u, tx, sequencerL1BlockSyncCfg, ctx)
-			},
-			Prune: func(firstCycle bool, p *stages.PruneState, tx kv.RwTx) error {
-				return PruneSequencerL1BlockSyncStage(p, tx, sequencerL1BlockSyncCfg, ctx)
-			},
-		},
+		// {
+		// 	ID:          stages2.L1InfoTree,
+		// 	Description: "L1 Info tree index updates sync",
+		// 	Forward: func(firstCycle bool, badBlockUnwind bool, s *stages.StageState, u stages.Unwinder, tx kv.RwTx, quiet bool) error {
+		// 		return SpawnL1InfoTreeStage(s, u, tx, l1InfoTreeCfg, ctx, quiet)
+		// 	},
+		// 	Unwind: func(firstCycle bool, u *stages.UnwindState, s *stages.StageState, tx kv.RwTx) error {
+		// 		return UnwindL1InfoTreeStage(u, tx, l1InfoTreeCfg, ctx)
+		// 	},
+		// 	Prune: func(firstCycle bool, p *stages.PruneState, tx kv.RwTx) error {
+		// 		return PruneL1InfoTreeStage(p, tx, l1InfoTreeCfg, ctx)
+		// 	},
+		// },
+		// {
+		// 	ID:          stages2.L1BlockSync,
+		// 	Description: "L1 Sequencer L1 Block Sync",
+		// 	Forward: func(firstCycle bool, badBlockUnwind bool, s *stages.StageState, unwinder stages.Unwinder, tx kv.RwTx, quiet bool) error {
+		// 		return SpawnSequencerL1BlockSyncStage(s, unwinder, ctx, tx, sequencerL1BlockSyncCfg, quiet)
+		// 	},
+		// 	Unwind: func(firstCycle bool, u *stages.UnwindState, s *stages.StageState, tx kv.RwTx) error {
+		// 		return UnwindSequencerL1BlockSyncStage(u, tx, sequencerL1BlockSyncCfg, ctx)
+		// 	},
+		// 	Prune: func(firstCycle bool, p *stages.PruneState, tx kv.RwTx) error {
+		// 		return PruneSequencerL1BlockSyncStage(p, tx, sequencerL1BlockSyncCfg, ctx)
+		// 	},
+		// },
 		{
 			ID:          stages2.Execution,
 			Description: "Sequence transactions",
@@ -272,19 +272,19 @@ func DefaultZkStages(
 				return PruneL1SyncerStage(p, tx, l1SyncerCfg, ctx)
 			},
 		},
-		{
-			ID:          stages2.L1InfoTree,
-			Description: "L1 Info tree index updates sync",
-			Forward: func(firstCycle bool, badBlockUnwind bool, s *stages.StageState, u stages.Unwinder, tx kv.RwTx, quiet bool) error {
-				return SpawnL1InfoTreeStage(s, u, tx, l1InfoTreeCfg, ctx, quiet)
-			},
-			Unwind: func(firstCycle bool, u *stages.UnwindState, s *stages.StageState, tx kv.RwTx) error {
-				return UnwindL1InfoTreeStage(u, tx, l1InfoTreeCfg, ctx)
-			},
-			Prune: func(firstCycle bool, p *stages.PruneState, tx kv.RwTx) error {
-				return PruneL1InfoTreeStage(p, tx, l1InfoTreeCfg, ctx)
-			},
-		},
+		// {
+		// 	ID:          stages2.L1InfoTree,
+		// 	Description: "L1 Info tree index updates sync",
+		// 	Forward: func(firstCycle bool, badBlockUnwind bool, s *stages.StageState, u stages.Unwinder, tx kv.RwTx, quiet bool) error {
+		// 		return SpawnL1InfoTreeStage(s, u, tx, l1InfoTreeCfg, ctx, quiet)
+		// 	},
+		// 	Unwind: func(firstCycle bool, u *stages.UnwindState, s *stages.StageState, tx kv.RwTx) error {
+		// 		return UnwindL1InfoTreeStage(u, tx, l1InfoTreeCfg, ctx)
+		// 	},
+		// 	Prune: func(firstCycle bool, p *stages.PruneState, tx kv.RwTx) error {
+		// 		return PruneL1InfoTreeStage(p, tx, l1InfoTreeCfg, ctx)
+		// 	},
+		// },
 		{
 			ID:          stages2.Batches,
 			Description: "Download batches",
