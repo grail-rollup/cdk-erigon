@@ -21,6 +21,7 @@ import (
 	ethTypes "github.com/ledgerwatch/erigon/core/types"
 	"github.com/ledgerwatch/erigon/rpc"
 	"github.com/ledgerwatch/erigon/zk/contracts"
+	"github.com/ledgerwatch/erigon/zk/syncer/verifier"
 )
 
 var (
@@ -37,6 +38,12 @@ const (
 	admin                           = "0xf851a440"
 	trustedSequencer                = "0xcfa8ed47"
 	sequencedBatchesMapSignature    = "0xb4d63f58"
+)
+
+const (
+	ROLLUP_CHAIN_ID = 1
+	ROLLUP_FORK_ID  = 12
+	BENEFICIARY     = "0xCae5b68Ff783594bDe1b93cdE627c741722c4D4d" // Aggregator address in kurtosis
 )
 
 type IEtherman interface {
@@ -90,9 +97,16 @@ type L1Syncer struct {
 	hasSentInitLogs        atomic.Bool
 	stateRootByBlockNumber map[uint64]common.Hash
 	lastLocalExitRoot      atomic.Value
+	verifyProof            bool // enable proof verification
+	verifier               verifier.Verifierer
 }
 
-func NewL1Syncer(ctx context.Context, etherMans []IEtherman, btcMan btcman.Clienter, l1ContractAddresses []common.Address, topics [][]common.Hash, blockRange, queryDelay uint64, highestBlockType string) *L1Syncer {
+func NewL1Syncer(ctx context.Context, etherMans []IEtherman, btcMan btcman.Clienter, l1ContractAddresses []common.Address, topics [][]common.Hash, blockRange, queryDelay uint64, highestBlockType string, verifyProof bool) *L1Syncer {
+	var v verifier.Verifierer
+	if verifyProof {
+		v = verifier.NewVerifier()
+	}
+
 	return &L1Syncer{
 		ctx:                    ctx,
 		etherMans:              etherMans,
@@ -108,6 +122,8 @@ func NewL1Syncer(ctx context.Context, etherMans []IEtherman, btcMan btcman.Clien
 		highestBlockType:       highestBlockType,
 		stateRootByBlockNumber: make(map[uint64]common.Hash),
 		lastLocalExitRoot:      atomic.Value{},
+		verifier:               v,
+		verifyProof:            verifyProof,
 	}
 }
 
@@ -619,9 +635,18 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 				"proof", proof)
 
 			s.stateRootByBlockNumber[uint64(tnx.Height)] = newStateRoot
-			// TODO: verify proof here using the verifier
 
-			rollupID := common.BigToHash(new(big.Int).SetInt64(int64(1))) // TODO: change; Default value in kurtosis
+			if s.verifyProof {
+				publicInputs := verifier.NewPublicInput(BENEFICIARY, proof, ROLLUP_CHAIN_ID, ROLLUP_FORK_ID, firstBatchNum, finalBatchNum, newLocalExitRoot.Hex(), oldStateRoot.Hex(), newStateRoot.Hex(), oldAccumulatedInputHash.Hex(), newAccumulatedInputHash.Hex())
+
+				if s.verifier.Verify(publicInputs) {
+					log.Info("Proof verified successfully")
+				} else {
+					log.Error("Failed to verify proof")
+				}
+			}
+
+			rollupID := common.BigToHash(new(big.Int).SetInt64(int64(ROLLUP_CHAIN_ID))) // TODO: change; Default value in kurtosis
 			verificationTopicLog := ethTypes.Log{
 				Topics: []common.Hash{
 					contracts.VerificationTopicEtrog,

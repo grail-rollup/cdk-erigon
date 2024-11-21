@@ -1170,6 +1170,12 @@ var (
 		Usage: "BTC manager mode. Either reader or writer",
 		Value: "reader",
 	}
+	// Verifier
+	VerifyProof = cli.BoolFlag{
+		Name:  "verify.proof",
+		Usage: "Enable proof verification",
+		Value: true,
+	}
 )
 
 var MetricFlags = []cli.Flag{&MetricsEnabledFlag, &MetricsHTTPFlag, &MetricsPortFlag}
@@ -2043,6 +2049,7 @@ func SetEthConfig(ctx *cli.Context, nodeConfig *nodecfg.Config, cfg *ethconfig.C
 	cfg.BtcIndexerHost = ctx.String(BtcIndexerHost.Name)
 	cfg.BtcIndexerPort = ctx.String(BtcIndexerPort.Name)
 	cfg.BtcMode = ctx.String(BtcMode.Name)
+	cfg.VerifyProof = ctx.Bool(VerifyProof.Name)
 }
 
 // SetDNSDiscoveryDefaults configures DNS discovery with the given URL if

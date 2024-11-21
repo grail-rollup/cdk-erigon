@@ -84,6 +84,8 @@ COPY --from=builder /app/build/bin/txpool /usr/local/bin/txpool
 COPY --from=builder /app/build/bin/verkle /usr/local/bin/verkle
 COPY --from=builder /app/build/bin/acl /usr/local/bin/acl
 
+COPY ./zk/syncer/verifier/bin/verifier /usr/local/bin/verifier
+COPY ./zk/syncer/verifier/bin/verifier-key-fork12.json /usr/local/bin/verifier-key-fork12.json
 
 EXPOSE 8545 \
        8551 \

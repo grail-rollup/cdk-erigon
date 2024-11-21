@@ -839,6 +839,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			cfg.L1BlockRange,
 			cfg.L1QueryDelay,
 			cfg.L1HighestBlockType,
+			cfg.VerifyProof,
 		)
 
 		backend.l1Syncer = syncer.NewL1Syncer(
@@ -850,6 +851,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			cfg.L1BlockRange,
 			cfg.L1QueryDelay,
 			cfg.L1HighestBlockType,
+			cfg.VerifyProof,
 		)
 
 		log.Info("Rollup ID", "rollupId", cfg.L1RollupId)
@@ -875,6 +877,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			cfg.L1BlockRange,
 			cfg.L1QueryDelay,
 			cfg.L1HighestBlockType,
+			cfg.VerifyProof,
 		)
 
 		if isSequencer {
@@ -932,6 +935,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 				cfg.L1BlockRange,
 				cfg.L1QueryDelay,
 				cfg.L1HighestBlockType,
+				cfg.VerifyProof,
 			)
 
 			backend.syncStages = stages2.NewSequencerZkStages(
