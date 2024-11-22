@@ -1174,7 +1174,7 @@ var (
 	VerifyProof = cli.BoolFlag{
 		Name:  "verify.proof",
 		Usage: "Enable proof verification",
-		Value: true,
+		Value: false,
 	}
 )
 

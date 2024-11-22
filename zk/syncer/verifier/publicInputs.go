@@ -11,6 +11,7 @@ import (
 
 const rFieldNumericStr = "21888242871839275222246405745257275088548364400416034343698204186575808495617"
 
+// publicInputs partially replicates PolygonRollupManager.sol
 type publicInputs struct {
 	rollupChainID    uint64
 	rollupForkID     uint64
@@ -22,16 +23,14 @@ type publicInputs struct {
 	oldAccInputHash  string
 	newAccInputHash  string
 	beneficiary      string
-	proof            string
 }
 
 type PublicInputer interface {
 	generatePubInput() (*big.Int, error)
-	getProof() string
 }
 
-func NewPublicInput(beneficiary string, proof string, rollupChainID uint64, rollupForkID uint64, initNumBatch uint64, finalNewBatch uint64, newLocalExitRoot string, oldStateRoot string, newStateRoot string, oldAccInputHash string, newAccInputHash string) PublicInputer {
-	return &publicInputs{beneficiary: beneficiary, proof: proof, rollupChainID: rollupChainID, rollupForkID: rollupForkID, initNumBatch: initNumBatch, finalNewBatch: finalNewBatch, newLocalExitRoot: newLocalExitRoot, oldStateRoot: oldStateRoot, newStateRoot: newStateRoot, oldAccInputHash: oldAccInputHash, newAccInputHash: newAccInputHash}
+func NewPublicInput(beneficiary string, rollupChainID uint64, rollupForkID uint64, initNumBatch uint64, finalNewBatch uint64, newLocalExitRoot string, oldStateRoot string, newStateRoot string, oldAccInputHash string, newAccInputHash string) PublicInputer {
+	return &publicInputs{beneficiary: beneficiary, rollupChainID: rollupChainID, rollupForkID: rollupForkID, initNumBatch: initNumBatch, finalNewBatch: finalNewBatch, newLocalExitRoot: newLocalExitRoot, oldStateRoot: oldStateRoot, newStateRoot: newStateRoot, oldAccInputHash: oldAccInputHash, newAccInputHash: newAccInputHash}
 }
 
 func decodeHexString(s string) ([]byte, error) {
@@ -96,8 +95,4 @@ func (pi *publicInputs) generatePubInput() (*big.Int, error) {
 	pubs := new(big.Int).Mod(hashInt, rField)
 
 	return pubs, nil
-}
-
-func (pi *publicInputs) getProof() string {
-	return pi.proof
 }
