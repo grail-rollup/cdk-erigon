@@ -21,6 +21,7 @@ import (
 	ethTypes "github.com/ledgerwatch/erigon/core/types"
 	"github.com/ledgerwatch/erigon/rpc"
 	"github.com/ledgerwatch/erigon/zk/contracts"
+	"github.com/ledgerwatch/erigon/zk/syncer/verifier"
 )
 
 var (
@@ -37,6 +38,11 @@ const (
 	admin                           = "0xf851a440"
 	trustedSequencer                = "0xcfa8ed47"
 	sequencedBatchesMapSignature    = "0xb4d63f58"
+)
+
+const (
+	rollupForkID = 12
+	beneficiary  = "0xCae5b68Ff783594bDe1b93cdE627c741722c4D4d" // Aggregator address in kurtosis
 )
 
 type IEtherman interface {
@@ -90,9 +96,17 @@ type L1Syncer struct {
 	hasSentInitLogs        atomic.Bool
 	stateRootByBlockNumber map[uint64]common.Hash
 	lastLocalExitRoot      atomic.Value
+	rollupID               uint64
+	verifyProof            bool // enable proof verification
+	verifier               verifier.Verifierer
 }
 
-func NewL1Syncer(ctx context.Context, etherMans []IEtherman, btcMan btcman.Clienter, l1ContractAddresses []common.Address, topics [][]common.Hash, blockRange, queryDelay uint64, highestBlockType string) *L1Syncer {
+func NewL1Syncer(ctx context.Context, etherMans []IEtherman, btcMan btcman.Clienter, l1ContractAddresses []common.Address, topics [][]common.Hash, blockRange, queryDelay uint64, highestBlockType string, verifyProof bool, rollupID uint64) *L1Syncer {
+	var v verifier.Verifierer
+	if verifyProof {
+		v = verifier.NewVerifier()
+	}
+
 	return &L1Syncer{
 		ctx:                    ctx,
 		etherMans:              etherMans,
@@ -108,6 +122,9 @@ func NewL1Syncer(ctx context.Context, etherMans []IEtherman, btcMan btcman.Clien
 		highestBlockType:       highestBlockType,
 		stateRootByBlockNumber: make(map[uint64]common.Hash),
 		lastLocalExitRoot:      atomic.Value{},
+		rollupID:               rollupID,
+		verifier:               v,
+		verifyProof:            verifyProof,
 	}
 }
 
@@ -172,7 +189,7 @@ func (s *L1Syncer) GetProgressMessageChan() chan string {
 	return s.logsChanProgress
 }
 
-func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64, syncFromBtc bool) {
+func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64) {
 	//if already started, don't start another thread
 	if s.isSyncStarted.Load() {
 		return
@@ -192,7 +209,7 @@ func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64, syncFromBtc bool) {
 		defer s.isSyncStarted.Store(false)
 		defer s.wgRunLoopDone.Done()
 
-		log.Info("Starting L1 syncer thread", "lastChecked", lastCheckedBlock, "syncFromBtc", syncFromBtc)
+		log.Info("Starting L1 syncer thread")
 		defer log.Info("Stopping L1 syncer thread")
 
 		for {
@@ -202,19 +219,14 @@ func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64, syncFromBtc bool) {
 
 			var latestL1Block uint64
 			var err error
-			if syncFromBtc {
-				latestL1Block, err = s.getLatestBtcL1Block()
-			} else {
-				latestL1Block, err = s.getLatestL1Block()
-			}
-			log.Info("Latest block", "block", latestL1Block, "syncFromBtc", syncFromBtc)
+			latestL1Block, err = s.getLatestBtcL1Block()
 			if err != nil {
 				log.Error("Error getting latest L1 block", "err", err)
 			} else {
 				log.Info("Checking for update", "latestL1Block", latestL1Block, "lastCheckedL1Block", s.lastCheckedL1Block.Load())
 				if latestL1Block > s.lastCheckedL1Block.Load() {
 					s.isDownloading.Store(true)
-					if err := s.queryBlocks(syncFromBtc); err != nil {
+					if err := s.queryBlocks(); err != nil {
 						log.Error("Error querying blocks", "err", err)
 					} else {
 						s.lastCheckedL1Block.Store(latestL1Block)
@@ -228,22 +240,26 @@ func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64, syncFromBtc bool) {
 	}()
 }
 
-func (s *L1Syncer) GetHeader(number uint64, syncFromBtc bool) (*ethTypes.Header, error) {
-	if syncFromBtc {
-		return s.getBtcHeader(number)
-	}
-	em := s.getNextEtherman()
-	return em.HeaderByNumber(context.Background(), new(big.Int).SetUint64(number))
-}
-
-func (s *L1Syncer) GetBlock(number uint64) (*ethTypes.Block, error) {
-	em := s.getNextEtherman()
-	return em.BlockByNumber(context.Background(), new(big.Int).SetUint64(number))
+func (s *L1Syncer) GetHeader(number uint64) (*ethTypes.Header, error) {
+	return s.getBtcHeader(number)
 }
 
 func (s *L1Syncer) GetTransaction(hash common.Hash) (ethTypes.Transaction, bool, error) {
-	em := s.getNextEtherman()
-	return em.TransactionByHash(context.Background(), hash)
+	inscription, err := s.btcMan.DecodeInscription(hash.Hex())
+	if err != nil {
+		return nil, false, err
+	}
+
+	// Currently GetTransaction is only used for getting SequenceBatches transactions
+	// In order to get the input data of the ETH tx we need to cut the last 40 bytes from the BTC inscription
+	var transaction *ethTypes.LegacyTx
+	length := len(inscription)
+
+	if length >= 80 {
+		transaction.Data = []byte(inscription[:length-80])
+	}
+
+	return transaction, false, nil
 }
 
 func (s *L1Syncer) GetPreElderberryAccInputHash(ctx context.Context, addr *common.Address, batchNum uint64) (common.Hash, error) {
@@ -266,22 +282,7 @@ func (s *L1Syncer) GetElderberryAccInputHash(ctx context.Context, addr *common.A
 	return h, nil
 }
 
-func (s *L1Syncer) GetL1BlockTimeStampByTxHash(ctx context.Context, txHash common.Hash) (uint64, error) {
-	em := s.getNextEtherman()
-	r, err := em.TransactionReceipt(ctx, txHash)
-	if err != nil {
-		return 0, err
-	}
-
-	header, err := em.HeaderByNumber(context.Background(), r.BlockNumber)
-	if err != nil {
-		return 0, err
-	}
-
-	return header.Time, nil
-}
-
-func (s *L1Syncer) L1QueryHeaders(logs []ethTypes.Log, syncFromBtc bool) (map[uint64]*ethTypes.Header, error) {
+func (s *L1Syncer) L1QueryHeaders(logs []ethTypes.Log) (map[uint64]*ethTypes.Header, error) {
 	logsSize := len(logs)
 
 	// queue up all the logs
@@ -297,7 +298,6 @@ func (s *L1Syncer) L1QueryHeaders(logs []ethTypes.Log, syncFromBtc bool) (map[ui
 	headersQueue := make(chan *ethTypes.Header, logsSize)
 
 	process := func(em IEtherman) {
-		ctx := context.Background()
 		for {
 			l, ok := <-logQueue
 			if !ok {
@@ -306,11 +306,7 @@ func (s *L1Syncer) L1QueryHeaders(logs []ethTypes.Log, syncFromBtc bool) (map[ui
 
 			var header *ethTypes.Header
 			var err error
-			if syncFromBtc {
-				header, err = s.getBtcHeader(l.BlockNumber)
-			} else {
-				header, err = em.HeaderByNumber(ctx, new(big.Int).SetUint64(l.BlockNumber))
-			}
+			header, err = s.getBtcHeader(l.BlockNumber)
 
 			if err != nil {
 				log.Error("Error getting block", "err", err)
@@ -395,7 +391,7 @@ func (s *L1Syncer) getLatestBtcL1Block() (uint64, error) {
 	return uint64(latest), err
 }
 
-func (s *L1Syncer) queryBlocks(syncFromBtc bool) error {
+func (s *L1Syncer) queryBlocks() error {
 	// Fixed receiving duplicate log events.
 	// lastCheckedL1Block means that it has already been checked in the previous cycle.
 	// It should not be checked again in the new cycle, so +1 is added here.
@@ -437,10 +433,8 @@ func (s *L1Syncer) queryBlocks(syncFromBtc bool) error {
 		go s.getSequencedLogs(jobs, results, stop, &wg)
 	}
 
-	if syncFromBtc {
-		wg.Add(1)
-		go s.getSequencedLogsBTC(int32(startBlock), stopBTC, &wg)
-	}
+	wg.Add(1)
+	go s.getSequencedLogsBTC(int32(startBlock), stopBTC, &wg)
 
 	for _, fetch := range fetches {
 		jobs <- fetch
@@ -619,9 +613,18 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 				"proof", proof)
 
 			s.stateRootByBlockNumber[uint64(tnx.Height)] = newStateRoot
-			// TODO: verify proof here using the verifier
 
-			rollupID := common.BigToHash(new(big.Int).SetInt64(int64(1))) // TODO: change; Default value in kurtosis
+			if s.verifyProof {
+				publicInputs := verifier.NewPublicInput(beneficiary, s.rollupID, rollupForkID, firstBatchNum, finalBatchNum, newLocalExitRoot.Hex(), oldStateRoot.Hex(), newStateRoot.Hex(), oldAccumulatedInputHash.Hex(), newAccumulatedInputHash.Hex())
+
+				if s.verifier.Verify(proof, publicInputs) {
+					log.Info("Proof verified successfully")
+				} else {
+					log.Error("Failed to verify proof")
+				}
+			}
+
+			rollupID := common.BigToHash(new(big.Int).SetInt64(int64(s.rollupID))) // TODO: change; Default value in kurtosis
 			verificationTopicLog := ethTypes.Log{
 				Topics: []common.Hash{
 					contracts.VerificationTopicEtrog,
@@ -651,9 +654,11 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 
 		} else {
 			// Sequence message
-			// [0:64] l1ExitRoot
-			// [64:80] lastBatchNum
-			inscription := decoded[1:]
+			// [var size] tx input data
+			// [32 bytes] l1ExitRoot
+			// [8 bytes] lastBatchNum
+			inscription := decoded[1:]                      // Cut trailing zero
+			inscription = inscription[len(inscription)-80:] // Get the latest 40 bytes
 			batchNum := new(big.Int).SetBytes(common.FromHex(inscription[64:80])).Uint64()
 			l1InfoRoot := common.HexToHash(inscription[0:64])
 			batchNumHash := common.BigToHash(new(big.Int).SetInt64(int64(batchNum)))
@@ -700,7 +705,7 @@ func (s *L1Syncer) getSequencedLogsBTC(startBlock int32, stop chan bool, wg *syn
 
 func (s *L1Syncer) generateAddNewRollupTopicLog() ethTypes.Log {
 	// TODO: move to config
-	rollUpID := common.BigToHash(big.NewInt(1))
+	rollUpID := common.BigToHash(big.NewInt(int64(s.rollupID)))
 	consensusAddress := common.HexToHash("0x01")
 	verifierAddress := common.HexToHash("0x01")
 	forkID := common.HexToHash("0x0c")
@@ -735,7 +740,7 @@ func (s *L1Syncer) generateAddNewRollupTopicLog() ethTypes.Log {
 
 func (s *L1Syncer) generateCreateNewRollupTopicLog() ethTypes.Log {
 	// TODO: move to config
-	rollUpID := common.BigToHash(big.NewInt(1))
+	rollUpID := common.BigToHash(big.NewInt(int64(s.rollupID)))
 	rollupAddress := common.HexToHash("0x01")
 	chainID := common.HexToHash("0x2775")
 	gasTokenAddress := common.HexToHash("0x0000000000000000000000000000000000000000")
@@ -856,10 +861,6 @@ func (s *L1Syncer) callGetRollupSequencedBatches(ctx context.Context, addr *comm
 	return h, lastBatchNumber, nil
 }
 
-func (s *L1Syncer) CallAdmin(ctx context.Context, addr *common.Address) (common.Address, error) {
-	return s.callGetAddress(ctx, addr, admin)
-}
-
 func (s *L1Syncer) CallRollupManager(ctx context.Context, addr *common.Address) (common.Address, error) {
 	return s.callGetAddress(ctx, addr, rollupManager)
 }
@@ -891,13 +892,13 @@ func (s *L1Syncer) callGetAddress(ctx context.Context, addr *common.Address, dat
 }
 
 func (s *L1Syncer) CheckL1BlockFinalized(blockNo uint64) (finalized bool, finalizedBn uint64, err error) {
-	em := s.getNextEtherman()
-	block, err := em.BlockByNumber(s.ctx, big.NewInt(rpc.FinalizedBlockNumber.Int64()))
+	height, err := s.btcMan.GetBlockchainHeight()
 	if err != nil {
 		return false, 0, err
 	}
+	blockchainHeight := uint64(height)
 
-	return block.NumberU64() >= blockNo, block.NumberU64(), nil
+	return blockchainHeight >= blockNo, blockchainHeight, nil
 }
 
 func calculateRollupExitRoot(currentRoot common.Hash) common.Hash {
