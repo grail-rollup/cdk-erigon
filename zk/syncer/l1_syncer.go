@@ -21,6 +21,7 @@ import (
 	ethTypes "github.com/ledgerwatch/erigon/core/types"
 	"github.com/ledgerwatch/erigon/rpc"
 	"github.com/ledgerwatch/erigon/zk/contracts"
+	"github.com/ledgerwatch/erigon/zk/syncer/verifier"
 )
 
 var (
@@ -37,6 +38,11 @@ const (
 	admin                           = "0xf851a440"
 	trustedSequencer                = "0xcfa8ed47"
 	sequencedBatchesMapSignature    = "0xb4d63f58"
+)
+
+const (
+	rollupForkID = 12
+	beneficiary  = "0xCae5b68Ff783594bDe1b93cdE627c741722c4D4d" // Aggregator address in kurtosis
 )
 
 type IEtherman interface {
@@ -90,9 +96,17 @@ type L1Syncer struct {
 	hasSentInitLogs        atomic.Bool
 	stateRootByBlockNumber map[uint64]common.Hash
 	lastLocalExitRoot      atomic.Value
+	rollupID               uint64
+	verifyProof            bool // enable proof verification
+	verifier               verifier.Verifierer
 }
 
-func NewL1Syncer(ctx context.Context, etherMans []IEtherman, btcMan btcman.Clienter, l1ContractAddresses []common.Address, topics [][]common.Hash, blockRange, queryDelay uint64, highestBlockType string) *L1Syncer {
+func NewL1Syncer(ctx context.Context, etherMans []IEtherman, btcMan btcman.Clienter, l1ContractAddresses []common.Address, topics [][]common.Hash, blockRange, queryDelay uint64, highestBlockType string, verifyProof bool, rollupID uint64) *L1Syncer {
+	var v verifier.Verifierer
+	if verifyProof {
+		v = verifier.NewVerifier()
+	}
+
 	return &L1Syncer{
 		ctx:                    ctx,
 		etherMans:              etherMans,
@@ -108,6 +122,9 @@ func NewL1Syncer(ctx context.Context, etherMans []IEtherman, btcMan btcman.Clien
 		highestBlockType:       highestBlockType,
 		stateRootByBlockNumber: make(map[uint64]common.Hash),
 		lastLocalExitRoot:      atomic.Value{},
+		rollupID:               rollupID,
+		verifier:               v,
+		verifyProof:            verifyProof,
 	}
 }
 
@@ -567,8 +584,8 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 			// [32:96] newLocalExitRoot
 			// [96:160] oldStateRoot
 			// [160:224] newStateRoot
-			// [224:288] oldAccountInputHash
-			// [288:352] newAccountInputHash
+			// [224:288] oldAccumulatedInputHash
+			// [288:352] newAccumulatedInputHash
 			// [352:] proof
 			inscription := decoded[1:]
 
@@ -581,8 +598,8 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 			newLocalExitRoot := common.HexToHash(inscription[32:96])
 			oldStateRoot := common.HexToHash(inscription[96:160])
 			newStateRoot := common.HexToHash(inscription[160:224])
-			oldAccountInputHash := common.HexToHash(inscription[224:288])
-			newAccountInputHash := common.HexToHash(inscription[288:352])
+			oldAccumulatedInputHash := common.HexToHash(inscription[224:288])
+			newAccumulatedInputHash := common.HexToHash(inscription[288:352])
 			proof := inscription[352:]
 
 			log.Info("Got verify inscription",
@@ -591,14 +608,23 @@ func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error
 				"newLocalExitRoot", newLocalExitRoot,
 				"oldStateRoot", oldStateRoot,
 				"newStateRoot", newStateRoot,
-				"oldAccountInputHash", oldAccountInputHash,
-				"newAccountInputHash", newAccountInputHash,
+				"oldAccumulatedInputHash", oldAccumulatedInputHash,
+				"newAccumulatedInputHash", newAccumulatedInputHash,
 				"proof", proof)
 
 			s.stateRootByBlockNumber[uint64(tnx.Height)] = newStateRoot
-			// TODO: verify proof here using the verifier
 
-			rollupID := common.BigToHash(new(big.Int).SetInt64(int64(1))) // TODO: change; Default value in kurtosis
+			if s.verifyProof {
+				publicInputs := verifier.NewPublicInput(beneficiary, s.rollupID, rollupForkID, firstBatchNum, finalBatchNum, newLocalExitRoot.Hex(), oldStateRoot.Hex(), newStateRoot.Hex(), oldAccumulatedInputHash.Hex(), newAccumulatedInputHash.Hex())
+
+				if s.verifier.Verify(proof, publicInputs) {
+					log.Info("Proof verified successfully")
+				} else {
+					log.Error("Failed to verify proof")
+				}
+			}
+
+			rollupID := common.BigToHash(new(big.Int).SetInt64(int64(s.rollupID))) // TODO: change; Default value in kurtosis
 			verificationTopicLog := ethTypes.Log{
 				Topics: []common.Hash{
 					contracts.VerificationTopicEtrog,
@@ -679,7 +705,7 @@ func (s *L1Syncer) getSequencedLogsBTC(startBlock int32, stop chan bool, wg *syn
 
 func (s *L1Syncer) generateAddNewRollupTopicLog() ethTypes.Log {
 	// TODO: move to config
-	rollUpID := common.BigToHash(big.NewInt(1))
+	rollUpID := common.BigToHash(big.NewInt(int64(s.rollupID)))
 	consensusAddress := common.HexToHash("0x01")
 	verifierAddress := common.HexToHash("0x01")
 	forkID := common.HexToHash("0x0c")
@@ -714,7 +740,7 @@ func (s *L1Syncer) generateAddNewRollupTopicLog() ethTypes.Log {
 
 func (s *L1Syncer) generateCreateNewRollupTopicLog() ethTypes.Log {
 	// TODO: move to config
-	rollUpID := common.BigToHash(big.NewInt(1))
+	rollUpID := common.BigToHash(big.NewInt(int64(s.rollupID)))
 	rollupAddress := common.HexToHash("0x01")
 	chainID := common.HexToHash("0x2775")
 	gasTokenAddress := common.HexToHash("0x0000000000000000000000000000000000000000")

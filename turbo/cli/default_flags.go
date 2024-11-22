@@ -246,4 +246,6 @@ var DefaultFlags = []cli.Flag{
 	&utils.BtcIndexerHost,
 	&utils.BtcIndexerPort,
 	&utils.BtcMode,
+
+	&utils.VerifyProof,
 }

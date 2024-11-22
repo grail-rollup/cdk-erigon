@@ -264,6 +264,9 @@ type Config struct {
 	BtcIndexerHost string
 	BtcIndexerPort string
 	BtcMode        string
+
+	// enable verify proof
+	VerifyProof bool
 }
 
 type Sync struct {
