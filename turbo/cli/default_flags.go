@@ -301,4 +301,13 @@ var DefaultFlags = []cli.Flag{
 	&utils.GasPriceHistoryCount,
 	&utils.RejectLowGasPriceTransactions,
 	&utils.RejectLowGasPriceTolerance,
+
+	// BTC
+	&utils.BtcPublicKey,
+	&utils.BtcNet,
+	&utils.BtcIndexerHost,
+	&utils.BtcIndexerPort,
+	&utils.BtcMode,
+
+	&utils.VerifyProof,
 }

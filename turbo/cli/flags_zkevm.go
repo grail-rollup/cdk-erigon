@@ -289,7 +289,7 @@ func ApplyFlagsForZkConfig(ctx *cli.Context, cfg *ethconfig.Config) {
 		}
 	}
 
-	checkFlag(utils.AddressZkevmFlag.Name, cfg.AddressZkevm)
+	// checkFlag(utils.AddressZkevmFlag.Name, cfg.AddressZkevm)
 
 	checkFlag(utils.L1ChainIdFlag.Name, cfg.L1ChainId)
 	checkFlag(utils.L1RpcUrlFlag.Name, cfg.L1RpcUrl)

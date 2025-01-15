@@ -86,29 +86,32 @@ COPY --from=builder /app/build/bin/txpool /usr/local/bin/txpool
 COPY --from=builder /app/build/bin/verkle /usr/local/bin/verkle
 COPY --from=builder /app/build/bin/acl /usr/local/bin/acl
 
+COPY ./zk/syncer/verifier/bin/verifier /usr/local/bin/verifier
+COPY ./zk/syncer/verifier/bin/verifier-key-fork12.json /usr/local/bin/verifier-key-fork12.json
+
 EXPOSE 8545 \
-       8551 \
-       8546 \
-       30303 \
-       30303/udp \
-       42069 \
-       42069/udp \
-       8080 \
-       9090 \
-       6060
+    8551 \
+    8546 \
+    30303 \
+    30303/udp \
+    42069 \
+    42069/udp \
+    8080 \
+    9090 \
+    6060
 
 # https://github.com/opencontainers/image-spec/blob/main/annotations.md
 ARG BUILD_DATE
 ARG VCS_REF
 ARG VERSION
 LABEL org.label-schema.build-date=$BUILD_DATE \
-      org.label-schema.description="Erigon ZKEVM Client" \
-      org.label-schema.name="ZKEVM Erigon" \
-      org.label-schema.schema-version="1.0" \
-      org.label-schema.url="https://torquem.ch" \
-      org.label-schema.vcs-ref=$VCS_REF \
-      org.label-schema.vcs-url="https://github.com/0xPolygonHermez/cdk-erigon.git" \
-      org.label-schema.vendor="Torquem" \
-      org.label-schema.version=$VERSION
+    org.label-schema.description="Erigon ZKEVM Client" \
+    org.label-schema.name="ZKEVM Erigon" \
+    org.label-schema.schema-version="1.0" \
+    org.label-schema.url="https://torquem.ch" \
+    org.label-schema.vcs-ref=$VCS_REF \
+    org.label-schema.vcs-url="https://github.com/0xPolygonHermez/cdk-erigon.git" \
+    org.label-schema.vendor="Torquem" \
+    org.label-schema.version=$VERSION
 
 ENTRYPOINT ["cdk-erigon"]

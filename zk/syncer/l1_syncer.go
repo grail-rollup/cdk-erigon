@@ -8,15 +8,20 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/grail-rollup/btcman"
 	"github.com/iden3/go-iden3-crypto/keccak256"
 	ethereum "github.com/ledgerwatch/erigon"
 	"github.com/ledgerwatch/erigon-lib/common"
 	"github.com/ledgerwatch/log/v3"
+	"golang.org/x/crypto/sha3"
 
 	"encoding/binary"
+	"encoding/hex"
 
 	ethTypes "github.com/ledgerwatch/erigon/core/types"
 	"github.com/ledgerwatch/erigon/rpc"
+	"github.com/ledgerwatch/erigon/zk/contracts"
+	"github.com/ledgerwatch/erigon/zk/syncer/verifier"
 )
 
 var (
@@ -33,6 +38,12 @@ const (
 	admin                           = "0xf851a440"
 	trustedSequencer                = "0xcfa8ed47"
 	sequencedBatchesMapSignature    = "0xb4d63f58"
+)
+
+const (
+	rollupForkID = 12
+	beneficiary  = "0xCae5b68Ff783594bDe1b93cdE627c741722c4D4d" // Aggregator address in kurtosis
+	//beneficiary = "0x617b3a3528F9cDd6630fd3301B9c8911F7Bf063D" // Mock prover returns this
 )
 
 //go:generate mockgen -typed=true -destination=./mocks/etherman_mock.go -package=mocks . IEtherman
@@ -63,6 +74,7 @@ type L1Syncer struct {
 	etherMans           []IEtherman
 	ethermanIndex       uint8
 	ethermanMtx         *sync.Mutex
+	btcman              btcman.Clienter
 	l1ContractAddresses []common.Address
 	topics              [][]common.Hash
 	blockRange          uint64
@@ -71,32 +83,48 @@ type L1Syncer struct {
 	latestL1Block uint64
 
 	// atomic
-	isSyncStarted      atomic.Bool
-	isDownloading      atomic.Bool
-	lastCheckedL1Block atomic.Uint64
-	wgRunLoopDone      sync.WaitGroup
-	flagStop           atomic.Bool
+	isSyncStarted         atomic.Bool
+	isDownloading         atomic.Bool
+	lastCheckedBtcL1Block atomic.Uint64
+	lastCheckedL1Block    atomic.Uint64
+	wgRunLoopDone         sync.WaitGroup
+	flagStop              atomic.Bool
 
 	// Channels
-	logsChan         chan []ethTypes.Log
-	logsChanProgress chan string
-
-	highestBlockType string // finalized, latest, safe
+	logsChan               chan []ethTypes.Log
+	logsChanProgress       chan string
+	highestBlockType       string
+	hasSentInitLogs        atomic.Bool
+	stateRootByBlockNumber map[uint64]common.Hash
+	lastLocalExitRoot      atomic.Value
+	rollupID               uint64
+	verifyProof            bool // enable proof verification
+	verifier               verifier.Verifierer
 }
 
-func NewL1Syncer(ctx context.Context, etherMans []IEtherman, l1ContractAddresses []common.Address, topics [][]common.Hash, blockRange, queryDelay uint64, highestBlockType string) *L1Syncer {
+func NewL1Syncer(ctx context.Context, etherMans []IEtherman, btcman btcman.Clienter, l1ContractAddresses []common.Address, topics [][]common.Hash, blockRange, queryDelay uint64, highestBlockType string, verifyProof bool, rollupID uint64) *L1Syncer {
+	var v verifier.Verifierer
+	if verifyProof {
+		v = verifier.NewVerifier()
+	}
 	return &L1Syncer{
-		ctx:                 ctx,
-		etherMans:           etherMans,
-		ethermanIndex:       0,
-		ethermanMtx:         &sync.Mutex{},
-		l1ContractAddresses: l1ContractAddresses,
-		topics:              topics,
-		blockRange:          blockRange,
-		queryDelay:          queryDelay,
-		logsChan:            make(chan []ethTypes.Log),
-		logsChanProgress:    make(chan string),
-		highestBlockType:    highestBlockType,
+		ctx:                    ctx,
+		etherMans:              etherMans,
+		ethermanIndex:          0,
+		ethermanMtx:            &sync.Mutex{},
+		btcman:                 btcman,
+		l1ContractAddresses:    l1ContractAddresses,
+		topics:                 topics,
+		blockRange:             blockRange,
+		queryDelay:             queryDelay,
+		logsChan:               make(chan []ethTypes.Log),
+		logsChanProgress:       make(chan string),
+		highestBlockType:       highestBlockType,
+		stateRootByBlockNumber: make(map[uint64]common.Hash),
+		lastLocalExitRoot:      atomic.Value{},
+		rollupID:               rollupID,
+		verifier:               v,
+		verifyProof:            verifyProof,
 	}
 }
 
@@ -117,6 +145,10 @@ func (s *L1Syncer) IsSyncStarted() bool {
 
 func (s *L1Syncer) IsDownloading() bool {
 	return s.isDownloading.Load()
+}
+
+func (s *L1Syncer) GetLastCheckedBtcL1Block() uint64 {
+	return s.lastCheckedBtcL1Block.Load()
 }
 
 func (s *L1Syncer) GetLastCheckedL1Block() uint64 {
@@ -182,7 +214,7 @@ func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64) {
 				return
 			}
 
-			latestL1Block, err := s.getLatestL1Block()
+			latestL1Block, err := s.getLatestBtcL1Block()
 			if err != nil {
 				log.Error("Error getting latest L1 block", "err", err)
 			} else {
@@ -203,8 +235,7 @@ func (s *L1Syncer) RunQueryBlocks(lastCheckedBlock uint64) {
 }
 
 func (s *L1Syncer) GetHeader(number uint64) (*ethTypes.Header, error) {
-	em := s.getNextEtherman()
-	return em.HeaderByNumber(s.ctx, new(big.Int).SetUint64(number))
+	return s.getBtcHeader(number)
 }
 
 func (s *L1Syncer) GetBlock(number uint64) (*ethTypes.Block, error) {
@@ -213,8 +244,21 @@ func (s *L1Syncer) GetBlock(number uint64) (*ethTypes.Block, error) {
 }
 
 func (s *L1Syncer) GetTransaction(hash common.Hash) (ethTypes.Transaction, bool, error) {
-	em := s.getNextEtherman()
-	return em.TransactionByHash(s.ctx, hash)
+	inscription, err := s.btcman.DecodeInscription(hash.Hex())
+	if err != nil {
+		return nil, false, err
+	}
+
+	// Currently GetTransaction is only used for getting SequenceBatches transactions
+	// In order to get the input data of the ETH tx we need to cut the last 40 bytes from the BTC inscription
+	transaction := &ethTypes.LegacyTx{}
+	length := len(inscription)
+
+	if length >= 80 {
+		transaction.Data = []byte(inscription[:length-80])
+	}
+
+	return transaction, false, nil
 }
 
 func (s *L1Syncer) GetPreElderberryAccInputHash(ctx context.Context, addr *common.Address, batchNum uint64) (common.Hash, error) {
@@ -268,13 +312,12 @@ func (s *L1Syncer) L1QueryHeaders(logs []ethTypes.Log) (map[uint64]*ethTypes.Hea
 	headersQueue := make(chan *ethTypes.Header, logsSize)
 
 	process := func(em IEtherman) {
-		ctx := context.Background()
 		for {
 			l, ok := <-logQueue
 			if !ok {
 				break
 			}
-			header, err := em.HeaderByNumber(ctx, new(big.Int).SetUint64(l.BlockNumber))
+			header, err := s.getBtcHeader(l.BlockNumber)
 			if err != nil {
 				log.Error("Error getting block", "err", err)
 				// assume a transient error and try again
@@ -305,6 +348,25 @@ func (s *L1Syncer) L1QueryHeaders(logs []ethTypes.Log) (map[uint64]*ethTypes.Hea
 	return headersMap, nil
 }
 
+func (s *L1Syncer) getBtcHeader(number uint64) (*ethTypes.Header, error) {
+	btcHeader, err := s.btcman.GetBlockHeader(number)
+	if err != nil {
+		return nil, err
+	}
+
+	// TODO: can we pass the btcHash directly?
+	hash := btcHeader.BlockHash()
+	btcHash := common.CastToHash(hash[:])
+	header := ethTypes.Header{
+		ParentHash: common.Hash(btcHeader.PrevBlock),
+		Number:     new(big.Int).SetUint64(number),
+		Time:       uint64(btcHeader.Timestamp.Unix()),
+		BtcHash:    &btcHash,
+		Root:       s.stateRootByBlockNumber[number],
+	}
+	return &header, nil
+}
+
 func (s *L1Syncer) getLatestL1Block() (uint64, error) {
 	em := s.getNextEtherman()
 
@@ -328,6 +390,15 @@ func (s *L1Syncer) getLatestL1Block() (uint64, error) {
 	s.latestL1Block = latest
 
 	return latest, nil
+}
+
+func (s *L1Syncer) getLatestBtcL1Block() (uint64, error) {
+	latest, err := s.btcman.GetBlockchainHeight()
+	if err != nil {
+		return 0, err
+	}
+
+	return uint64(latest), err
 }
 
 func (s *L1Syncer) queryBlocks() error {
@@ -361,6 +432,8 @@ func (s *L1Syncer) queryBlocks() error {
 
 	wg := sync.WaitGroup{}
 	stop := make(chan bool)
+	stopBTC := make(chan bool)
+
 	jobs := make(chan fetchJob, len(fetches))
 	results := make(chan jobResult, len(fetches))
 	defer close(results)
@@ -369,7 +442,8 @@ func (s *L1Syncer) queryBlocks() error {
 	for i := 0; i < batchWorkers; i++ {
 		go s.getSequencedLogs(jobs, results, stop, &wg)
 	}
-
+	wg.Add(1)
+	go s.getSequencedLogsBTC(int32(startBlock), stopBTC, &wg)
 	for _, fetch := range fetches {
 		jobs <- fetch
 	}
@@ -416,6 +490,7 @@ loop:
 	}
 
 	close(stop)
+	close(stopBTC)
 	wg.Wait()
 
 	return err
@@ -460,13 +535,283 @@ func (s *L1Syncer) getSequencedLogs(jobs <-chan fetchJob, results chan jobResult
 				}
 				break
 			}
+			filteredLogs := []ethTypes.Log{}
+			if !s.hasSentInitLogs.Load() {
+				addNewRollupLog := s.generateAddNewRollupTopicLog()
+				filteredLogs = append(filteredLogs, addNewRollupLog)
+
+				createNewRollupLog := s.generateCreateNewRollupTopicLog()
+				filteredLogs = append(filteredLogs, createNewRollupLog)
+
+				initialSequenceBatchesLog := s.generateInitialSequenceBatchesTopicLog()
+				filteredLogs = append(filteredLogs, initialSequenceBatchesLog)
+
+				s.hasSentInitLogs.Store(true)
+			}
+			for _, l := range logs {
+				topicType := l.Topics[0]
+				if topicType != contracts.SequenceBatchesTopicEtrog &&
+					topicType != contracts.VerificationTopicEtrog &&
+					topicType != contracts.VerificationValidiumTopicEtrog &&
+					topicType != contracts.UpdateRollupTopic &&
+					topicType != contracts.AddNewRollupTypeTopic &&
+					topicType != contracts.CreateNewRollupTopic &&
+					topicType != contracts.UpdateL1InfoTreeTopic &&
+					topicType != contracts.InitialSequenceBatchesTopic {
+
+					filteredLogs = append(filteredLogs, l)
+				}
+
+			}
 			results <- jobResult{
 				Size:  j.To - j.From,
 				Error: nil,
-				Logs:  logs,
+				Logs:  filteredLogs,
 			}
 		}
 	}
+}
+
+func (s *L1Syncer) getInscriptions(startBlock int32) (logs []ethTypes.Log, error error) {
+
+	tnxs, err := s.btcman.GetHistory(int(startBlock), false)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, tnx := range tnxs {
+		decoded, err := s.btcman.DecodeInscription(tnx.TxHash)
+		if err != nil || len(decoded) == 0 {
+			continue
+		}
+
+		if len(decoded) == 1889 { // 944 bytes + starting 0
+			// Verify message
+			// [0:16] firstBatchNum
+			// [16:32] finalBatchNum
+			// [32:96] newLocalExitRoot
+			// [96:160] oldStateRoot
+			// [160:224] newStateRoot
+			// [224:288] oldAccumulatedInputHash
+			// [288:352] newAccumulatedInputHash
+			// [352:] proof
+			inscription := decoded[1:]
+
+			firstBatchNum := new(big.Int).SetBytes(common.FromHex(inscription[0:16])).Uint64()
+			// firstBatchNumHash := common.BigToHash(new(big.Int).SetInt64(int64(firstBatchNum)))
+
+			finalBatchNum := new(big.Int).SetBytes(common.FromHex(inscription[16:32])).Uint64()
+			finalBatchNumHash := common.BigToHash(new(big.Int).SetInt64(int64(finalBatchNum)))
+
+			newLocalExitRoot := common.HexToHash(inscription[32:96])
+			oldStateRoot := common.HexToHash(inscription[96:160])
+			newStateRoot := common.HexToHash(inscription[160:224])
+			oldAccumulatedInputHash := common.HexToHash(inscription[224:288])
+			newAccumulatedInputHash := common.HexToHash(inscription[288:352])
+			proof := inscription[352:]
+
+			log.Info("Got verify inscription",
+				"firstBatchNum", firstBatchNum,
+				"finalBatchNum", finalBatchNum,
+				"newLocalExitRoot", newLocalExitRoot,
+				"oldStateRoot", oldStateRoot,
+				"newStateRoot", newStateRoot,
+				"oldAccumulatedInputHash", oldAccumulatedInputHash,
+				"newAccumulatedInputHash", newAccumulatedInputHash,
+				"proof", proof)
+
+			s.stateRootByBlockNumber[uint64(tnx.Height)] = newStateRoot
+
+			if s.verifyProof {
+				publicInputs := verifier.NewPublicInput(beneficiary, s.rollupID, rollupForkID, firstBatchNum, finalBatchNum, newLocalExitRoot.Hex(), oldStateRoot.Hex(), newStateRoot.Hex(), oldAccumulatedInputHash.Hex(), newAccumulatedInputHash.Hex())
+
+				if s.verifier.Verify(proof, publicInputs) {
+					log.Info("Proof verified successfully")
+				} else {
+					log.Error("Failed to verify proof")
+				}
+			}
+
+			rollupID := common.BigToHash(new(big.Int).SetInt64(int64(s.rollupID))) // TODO: change; Default value in kurtosis
+			verificationTopicLog := ethTypes.Log{
+				Topics: []common.Hash{
+					contracts.VerificationTopicEtrog,
+					rollupID,
+				},
+				Data:        append(finalBatchNumHash.Bytes(), newStateRoot.Bytes()...),
+				BlockNumber: uint64(tnx.Height),
+				TxHash:      common.HexToHash(tnx.TxHash),
+			}
+
+			lastExitRoot := s.lastLocalExitRoot.Load()
+			if lastExitRoot == nil || lastExitRoot.(common.Hash) != newLocalExitRoot {
+				s.lastLocalExitRoot.Store(newLocalExitRoot)
+				l1UpdateInfoTreeLog := ethTypes.Log{
+					Topics: []common.Hash{
+						contracts.UpdateL1InfoTreeTopic,
+						common.HexToHash("0x00"),
+						calculateRollupExitRoot(newLocalExitRoot),
+					},
+					BlockNumber: 1,
+					TxHash:      common.HexToHash("0x01"),
+				}
+				logs = append(logs, verificationTopicLog, l1UpdateInfoTreeLog)
+			} else {
+				logs = append(logs, verificationTopicLog)
+			}
+
+		} else {
+			// Sequence message
+			// [var size] tx input data
+			// [32 bytes] l1ExitRoot
+			// [8 bytes] lastBatchNum
+			inscription := decoded[1:]                      // Cut trailing zero
+			inscription = inscription[len(inscription)-80:] // Get the latest 40 bytes
+			batchNum := new(big.Int).SetBytes(common.FromHex(inscription[64:80])).Uint64()
+			l1InfoRoot := common.HexToHash(inscription[0:64])
+			batchNumHash := common.BigToHash(new(big.Int).SetInt64(int64(batchNum)))
+			sequencedBatchTopicLog := ethTypes.Log{
+				Topics: []common.Hash{
+					contracts.SequenceBatchesTopicEtrog,
+					batchNumHash,
+				},
+				Data:        l1InfoRoot.Bytes(),
+				BlockNumber: uint64(tnx.Height),
+				TxHash:      common.HexToHash(tnx.TxHash),
+			}
+			logs = append(logs, sequencedBatchTopicLog)
+			log.Info("Got sequence inscription", "batch num", batchNum, "l1InfoRoot", l1InfoRoot)
+		}
+	}
+
+	return logs, nil
+}
+
+func (s *L1Syncer) getSequencedLogsBTC(startBlock int32, stop chan bool, wg *sync.WaitGroup) {
+	/* what we need to do here :
+	- construct the two topic logs and pass the to the logs channel
+	- skip this two two topics in the original getSequencedLogs: this is done
+	- update parsing logic for this two events
+	*/
+	defer wg.Done()
+	for {
+		select {
+		case <-stop:
+			return
+		default:
+			logs, err := s.getInscriptions(startBlock)
+			if err != nil {
+				log.Error("Error getting inscriptions", "error", err)
+			}
+			if err == nil {
+				s.logsChan <- logs
+			}
+		}
+	}
+
+}
+
+func (s *L1Syncer) generateAddNewRollupTopicLog() ethTypes.Log {
+	// TODO: move to config
+	rollUpID := common.BigToHash(big.NewInt(int64(s.rollupID)))
+	consensusAddress := common.HexToHash("0x01")
+	verifierAddress := common.HexToHash("0x01")
+	forkID := common.HexToHash("0x0c")
+	rollupCompatibilityID := common.HexToHash("0x00")
+	genesisBytes := common.HexToHash("0xd619a27d32e3050f2265a3f58dd74c8998572812da4874aa052f0886d0dfaf47")
+	descriptionSlot := common.HexToHash("0xc0")
+	descriptionLength := common.HexToHash("0x0f")
+	description := common.HexToHash("0x6b7572746f7369732d6465766e65740000000000000000000000000000000000")
+
+	data := []byte{}
+	data = append(data, consensusAddress.Bytes()...)
+	data = append(data, verifierAddress.Bytes()...)
+	data = append(data, forkID.Bytes()...)
+	data = append(data, rollupCompatibilityID.Bytes()...)
+	data = append(data, genesisBytes.Bytes()...)
+	data = append(data, descriptionSlot.Bytes()...)
+	data = append(data, descriptionLength.Bytes()...)
+	data = append(data, description.Bytes()...)
+
+	addNewRollupLog := ethTypes.Log{
+		Topics: []common.Hash{
+			contracts.AddNewRollupTypeTopic,
+			rollUpID,
+		},
+		Data:        data,
+		BlockNumber: 1,
+		TxHash:      common.HexToHash("0xdd992e42874d7046147f526a94806d08df5e794b8f3545b481bf95f93f8478d5"),
+	}
+	log.Info("Sent add new rollup topic log", "log", addNewRollupLog.Topics[0], "data", hex.EncodeToString(addNewRollupLog.Data))
+	return addNewRollupLog
+}
+
+func (s *L1Syncer) generateCreateNewRollupTopicLog() ethTypes.Log {
+	// TODO: move to config
+	rollUpID := common.BigToHash(big.NewInt(int64(s.rollupID)))
+	rollupAddress := common.HexToHash("0x01")
+	chainID := common.HexToHash("0x2775")
+	gasTokenAddress := common.HexToHash("0x0000000000000000000000000000000000000000")
+
+	data := []byte{}
+	data = append(data, rollUpID.Bytes()...)
+	data = append(data, rollupAddress.Bytes()...)
+	data = append(data, chainID.Bytes()...)
+	data = append(data, gasTokenAddress.Bytes()...)
+
+	createNewRollupLog := ethTypes.Log{
+		Topics: []common.Hash{
+			contracts.CreateNewRollupTopic,
+			rollUpID,
+		},
+		Data:        data,
+		BlockNumber: 1,
+		TxHash:      common.HexToHash("0x01"),
+	}
+	log.Info("Sent create new rollup topic log", "log", createNewRollupLog.Topics[0], "data", hex.EncodeToString(createNewRollupLog.Data))
+	return createNewRollupLog
+}
+
+func (s *L1Syncer) generateInitialSequenceBatchesTopicLog() ethTypes.Log {
+	// TODO: move to config
+	zeroHash := common.HexToHash("0x00")
+
+	data := []byte{}
+	initialGER := []common.Hash{common.HexToHash("0x60"), common.HexToHash("0xad3228b676f7d3cd4284a5443f17f1962b36e491b30a40b2405849e597ba5fb5")}
+	for _, hash := range initialGER {
+		data = append(data, hash.Bytes()...)
+	}
+
+	dataHashes := []common.Hash{
+		common.HexToHash("0x0000000000000000000000005b06837a43bdc3dd9f114558daf4b26ed49842ed"),
+		common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000148"),
+		common.HexToHash("0xf9010380808401c9c38094d71f8f956ad979cc2988381b8a743a2fe280537d80"),
+		common.HexToHash("0xb8e4f811bff70000000000000000000000000000000000000000000000000000"),
+		common.HexToHash("0x0000000000010000000000000000000000000000000000000000000000000000"),
+		zeroHash,
+		common.HexToHash("0x000000000000000000000000000000000000a40d5f56745a118d0906a34e69ae"),
+		common.HexToHash("0xc8c0db1cb8fa0000000000000000000000000000000000000000000000000000"),
+		zeroHash,
+		common.HexToHash("0x0000000000c00000000000000000000000000000000000000000000000000000"),
+		zeroHash,
+		common.HexToHash("0x0005ca1ab1e00000000000000000000000000000000000000000000000000000"),
+		common.HexToHash("0x00005ca1ab1e1bff000000000000000000000000000000000000000000000000"),
+	}
+
+	for _, hash := range dataHashes {
+		data = append(data, hash.Bytes()...)
+	}
+
+	initialSequenceBatchesLog := ethTypes.Log{
+		Topics: []common.Hash{
+			contracts.InitialSequenceBatchesTopic,
+		},
+		Data:        data,
+		BlockNumber: 1,
+		TxHash:      common.HexToHash("0x01"),
+	}
+	log.Info("Sent initial sequence batches topic log", "log", initialSequenceBatchesLog.Topics[0], "data", hex.EncodeToString(initialSequenceBatchesLog.Data))
+	return initialSequenceBatchesLog
 }
 
 // calls the old rollup contract to get the accInputHash for a certain batch
@@ -555,11 +900,30 @@ func (s *L1Syncer) callGetAddress(ctx context.Context, addr *common.Address, dat
 }
 
 func (s *L1Syncer) CheckL1BlockFinalized(blockNo uint64) (finalized bool, finalizedBn uint64, err error) {
-	em := s.getNextEtherman()
-	block, err := em.BlockByNumber(s.ctx, big.NewInt(rpc.FinalizedBlockNumber.Int64()))
+	height, err := s.btcman.GetBlockchainHeight()
 	if err != nil {
 		return false, 0, err
 	}
+	blockchainHeight := uint64(height)
 
-	return block.NumberU64() >= blockNo, block.NumberU64(), nil
+	return blockchainHeight >= blockNo, blockchainHeight, nil
+}
+
+func calculateRollupExitRoot(currentRoot common.Hash) common.Hash {
+	currentZeroHashHeight := [32]byte{}
+	remainingLevels := 32
+
+	for i := 0; i < remainingLevels; i++ {
+		hasher := sha3.NewLegacyKeccak256()
+		hasher.Write(currentRoot[:])
+		hasher.Write(currentZeroHashHeight[:])
+		copy(currentRoot[:], hasher.Sum(nil))
+
+		hasher.Reset()
+		hasher.Write(currentZeroHashHeight[:])
+		hasher.Write(currentZeroHashHeight[:])
+		copy(currentZeroHashHeight[:], hasher.Sum(nil))
+	}
+
+	return common.BytesToHash(currentRoot[:])
 }

@@ -109,7 +109,7 @@ func (ec *Client) PeerCount(ctx context.Context) (uint64, error) {
 
 type rpcBlock struct {
 	Hash         common.Hash         `json:"hash"`
-	Transactions []rpcTransaction    `json:"transactions"`
+	Transactions []RpcTransaction    `json:"transactions"`
 	UncleHashes  []common.Hash       `json:"uncles"`
 	Withdrawals  []*types.Withdrawal `json:"withdrawals,omitempty"`
 }
@@ -253,7 +253,7 @@ func (i *Int) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type rpcTransaction struct {
+type RpcTransaction struct {
 	BlockNumber      *string         `json:"blockNumber,omitempty"`
 	BlockHash        *common.Hash    `json:"blockHash,omitempty"`
 	From             *common.Address `json:"from,omitempty"`
@@ -270,6 +270,7 @@ type rpcTransaction struct {
 	V                *string         `json:"v,omitempty"`
 	Value            *BigInt         `json:"value,omitempty"`
 }
+
 
 // Hex2Bytes converts a hex string to a byte slice.
 func Hex2Bytes(hexR *string) []byte {
@@ -290,8 +291,8 @@ func Hex2Bytes(hexR *string) []byte {
 	return b
 }
 
-// Tx return types.Transaction from rpcTransaction
-func (tx *rpcTransaction) Tx() types.Transaction {
+// Tx return types.Transaction from RpcTransaction
+func (tx *RpcTransaction) Tx() types.Transaction {
 	if tx == nil {
 		return nil
 	}
@@ -374,7 +375,7 @@ func Hex2Int256(hex string) uint256.Int {
 
 // TransactionByHash returns the transaction with the given hash.
 func (ec *Client) TransactionByHash(ctx context.Context, hash common.Hash) (tx types.Transaction, isPending bool, err error) {
-	var json *rpcTransaction
+	var json *RpcTransaction
 	err = ec.c.CallContext(ctx, &json, "eth_getTransactionByHash", hash)
 	if err != nil {
 		return nil, false, err
@@ -426,7 +427,7 @@ func (ec *Client) TransactionCount(ctx context.Context, blockHash common.Hash) (
 
 // TransactionInBlock returns a single transaction at index in the given block.
 func (ec *Client) TransactionInBlock(ctx context.Context, blockHash common.Hash, index uint) (types.Transaction, error) {
-	var json *rpcTransaction
+	var json *RpcTransaction
 	err := ec.c.CallContext(ctx, &json, "eth_getTransactionByBlockHashAndIndex", blockHash, hexutil.Uint64(index))
 	if err != nil {
 		return nil, err

@@ -1491,6 +1491,39 @@ var (
 		Usage: "transaction count fetched from txpool each time",
 		Value: 1000,
 	}
+
+	// BTCMAN
+	BtcPublicKey = cli.StringFlag{
+		Name:  "btcman.public-key",
+		Usage: "BTC public key",
+		Value: "03e392587e5c9fdb0b4f96614d8a557a953e6cb1253298a60ff947e3193adedbb7",
+	}
+	BtcNet = cli.StringFlag{
+		Name:  "btcman.network",
+		Usage: "BTC network",
+		Value: "regtest",
+	}
+	BtcIndexerHost = cli.StringFlag{
+		Name:  "btcman.indexer.host",
+		Usage: "BTC Electrum indexer host address",
+		Value: "host.docker.internal",
+	}
+	BtcIndexerPort = cli.StringFlag{
+		Name:  "btcman.indexer.port",
+		Usage: "BTC Electrum indexer host port",
+		Value: "50001",
+	}
+	BtcMode = cli.StringFlag{
+		Name:  "btcman.mode",
+		Usage: "BTC manager mode. Either reader or writer",
+		Value: "reader",
+	}
+	// Verifier
+	VerifyProof = cli.BoolFlag{
+		Name:  "verify.proof",
+		Usage: "Enable proof verification",
+		Value: false,
+	}
 )
 
 var MetricFlags = []cli.Flag{&MetricsEnabledFlag, &MetricsHTTPFlag, &MetricsPortFlag, &DiagDisabledFlag, &DiagEndpointAddrFlag, &DiagEndpointPortFlag, &DiagSpeedTestFlag}
@@ -2265,6 +2298,14 @@ func SetEthConfig(ctx *cli.Context, nodeConfig *nodecfg.Config, cfg *ethconfig.C
 			panic(err)
 		}
 		downloadernat.DoNat(nodeConfig.P2P.NAT, cfg.Downloader.ClientConfig, logger)
+
+		// btcman
+		cfg.BtcPublicKey = ctx.String(BtcPublicKey.Name)
+		cfg.BtcNet = ctx.String(BtcNet.Name)
+		cfg.BtcIndexerHost = ctx.String(BtcIndexerHost.Name)
+		cfg.BtcIndexerPort = ctx.String(BtcIndexerPort.Name)
+		cfg.BtcMode = ctx.String(BtcMode.Name)
+		cfg.VerifyProof = ctx.Bool(VerifyProof.Name)
 	}
 
 	nodeConfig.Http.Snap = cfg.Snapshot

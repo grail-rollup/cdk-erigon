@@ -16,7 +16,6 @@ import (
 	"github.com/ledgerwatch/erigon/eth/stagedsync"
 	"github.com/ledgerwatch/erigon/eth/stagedsync/stages"
 	"github.com/ledgerwatch/erigon/zk"
-	"github.com/ledgerwatch/erigon/zk/hermez_db"
 	zktx "github.com/ledgerwatch/erigon/zk/tx"
 	"github.com/ledgerwatch/erigon/zk/utils"
 )
@@ -37,8 +36,8 @@ func SpawnSequencingStage(
 	}
 	defer roTx.Rollback()
 
-	hermezDb := hermez_db.NewHermezDbReader(roTx)
-	lastSequence, err := hermezDb.GetLatestSequence()
+	// hermezDb := hermez_db.NewHermezDbReader(roTx)
+	// lastSequence, err := hermezDb.GetLatestSequence()
 	if err != nil {
 		return fmt.Errorf("GetLatestSequence: %w", err)
 	}
@@ -48,9 +47,9 @@ func SpawnSequencingStage(
 		return err
 	}
 
-	if lastSequence != nil && lastBatch < lastSequence.BatchNo && !cfg.zk.IsL1Recovery() {
-		panic(fmt.Sprintf("lastBatch %d < lastSequence.BatchNo %d", lastBatch, lastSequence.BatchNo))
-	}
+	// if lastSequence != nil && lastBatch < lastSequence.BatchNo && !cfg.zk.IsL1Recovery() {
+	// 	panic(fmt.Sprintf("lastBatch %d < lastSequence.BatchNo %d", lastBatch, lastSequence.BatchNo))
+	// }
 
 	highestBatchInDs, err := cfg.dataStreamServer.GetHighestBatchNumber()
 	if err != nil {

@@ -110,6 +110,8 @@ type Header struct {
 	Verkle        bool
 	VerkleProof   []byte
 	VerkleKeyVals []verkle.KeyValuePair
+	// BTC data
+	BtcHash *libcommon.Hash
 }
 
 func (h *Header) EncodingSize() int {
@@ -533,6 +535,9 @@ type headerMarshaling struct {
 // Hash returns the block hash of the header, which is simply the keccak256 hash of its
 // RLP encoding.
 func (h *Header) Hash() libcommon.Hash {
+	if h.BtcHash != nil {
+		return *h.BtcHash
+	}
 	return rlpHash(h)
 }
 

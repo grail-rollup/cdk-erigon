@@ -259,6 +259,16 @@ type Config struct {
 	//[zkevm]
 	*Zk
 
+	// btcman
+	BtcPublicKey   string
+	BtcNet         string
+	BtcIndexerHost string
+	BtcIndexerPort string
+	BtcMode        string
+
+	// enable verify proof
+	VerifyProof bool
+
 	ForcePartialCommit bool
 
 	// Embedded Silkworm support
